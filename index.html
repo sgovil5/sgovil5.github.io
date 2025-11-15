@@ -13,7 +13,10 @@
   </head>
 
   <body>
-    <table style="width:100%;max-width:800px;border:0px;border-spacing:0px;border-collapse:separate;margin-right:auto;margin-left:auto;"><tbody>
+    <div class="navbar" style="width:100%;max-width:1000px;margin-right:auto;margin-left:auto;padding:12px 0;text-align:center;">
+      <a href="index.html">Home</a> &nbsp;/&nbsp; <a href="blog.html">Blog</a>
+    </div>
+    <table style="width:100%;max-width:1000px;border:0px;border-spacing:0px;border-collapse:separate;margin-right:auto;margin-left:auto;"><tbody>
       <tr style="padding:0px">
         <td style="padding:0px">
           <table style="width:100%;border:0px;border-spacing:0px;border-collapse:separate;margin-right:auto;margin-left:auto;"><tbody>
@@ -22,10 +25,10 @@
                 <p class="name" style="text-align: center;">
                   Shitij Govil
                 </p>
-                <p>Hi! I'm a second year Computer Science undergraduate student at Georgia Tech, where I've been fortunate to work with Prof. <a href="https://sites.google.com/view/panli-purdue/home">Pan Li</a> and Prof. <a href="https://animesh.garg.tech/">Animesh Garg</a>. My recent works spans diffusion-based world models, mechanistic interpretability, and ML for science (currently physics).
+                <p>Hi! I'm a third year Computer Science undergraduate student at Georgia Tech, where I've been fortunate to work with Prof. <a href="https://sites.google.com/view/panli-purdue/home">Pan Li</a> and Prof. <a href="https://animesh.garg.tech/">Animesh Garg</a>. My recent works spans reasoning in LLMs and ML for science (currently physics).
                 </p>
                 <p>
-                  My research goal is to create sample-efficient and interpretable models that provide actionable insights in many domains (like language, planning, science etc.)
+                  My research goal is to create sample-efficient and interpretable models that provide actionable insights in many domains (like reasoning in LLMs, science etc.)
                 </p>
                 <p style="text-align:center">
                   <a href="mailto:sgovil9@gatech.edu">sgovil9 [at] gatech [dot] edu</a> &nbsp;/&nbsp;
@@ -51,6 +54,70 @@
           <table style="width:100%;border:0px;border-spacing:0px;border-collapse:separate;margin-right:auto;margin-left:auto;"><tbody>
             <tr>
               <td style="padding:16px;width:20%;vertical-align:middle">
+                <img src='images/HEPT.png' width=100%>
+              </td>
+              <td style="padding:8px;width:80%;vertical-align:middle">
+                <a href="https://arxiv.org/pdf/2510.07594">
+                  <span class="papertitle">Locality-Sensitive Hashing-Based Efficient Point Transformer for Charged Particle Reconstruction</span>
+                </a>
+                <br>
+                <em>Machine Learning and the Physical Sciences Workshop, NeurIPS 2025</em>
+                <br>
+                <a href="https://arxiv.org/pdf/2510.07594">paper</a>
+                <p></p>
+                <p>
+                  <strong>Shitij Govil</strong>, Jack P Rodgers, Yuan-Tang Chou, Siqi Miao, Amit Saha, Advaith Anand, Kilian Lieret, Gage DeZoort, Mia Liu, Javier Duarte, Pan Li, Shih-Chieh Hsu
+                </p>
+                <p>
+                  Unified evaluation of HEPT and GNN baselines, and HEPTv2: a lightweight decoder that removes clustering and enables fast end-to-end inference for charged particle tracking.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:16px;width:20%;vertical-align:middle">
+                <img src='images/reasoning.png' width=100%>
+              </td>
+              <td style="padding:8px;width:80%;vertical-align:middle">
+                <a href="https://arxiv.org/abs/2507.09850">
+                  <span class="papertitle">Is Human-Written Data Enough? The Challenge of Teaching Reasoning to LLMs Without RL or Distillation</span>
+                </a>
+                <br>
+                <em>AI for Math Workshop, ICML 2025</em>
+                <br>
+                <a href="https://arxiv.org/abs/2507.09850">paper</a>
+                <p></p>
+                <p>
+                  Wei Du, Branislav Kisacanin, George Armstrong, Shubham Toshniwal, Ivan Moshkov, Alexan Ayrapetyan, Sadegh Mahdavi, Dan Zhao, Shizhe Diao, Dragan Masulovic, Marius Stanean, Advaith Avadhanam, Max Wang, Ashmit Dutta, <strong>Shitij Govil</strong>, Sri Yanamandara, Mihir Tandon, Sriram Ananthakrishnan, Vedant Rathi, David Zhang, Joonseok Kang, Leon Luo, Titu Andreescu, Boris Ginsburg, Igor Gitman
+                </p>
+                <p>
+                  Developed strong reasoning capabilities in base models without reinforcement learning via high-quality CoT.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:16px;width:20%;vertical-align:middle">
+                <img src='images/matdeeplearn.png' width=100%>
+              </td>
+              <td style="padding:8px;width:80%;vertical-align:middle">
+                <a href="https://arxiv.org/pdf/2503.01227">
+                  <span class="papertitle">Pre-training graph neural networks with structural fingerprints for materials discovery</span>
+                </a>
+                <br>
+                <em>arXiv, 2025 [In Submission: Machine Learning Science and Technology]</em>
+                <br>
+                <a href="https://github.com/Fung-Lab/MatDeepLearn_dev">code</a> /
+                <a href="https://arxiv.org/pdf/2503.01227">paper</a>
+                <p></p>
+                <p>
+                  Shuyi Jia, <strong>Shitij Govil</strong>, Manav Ramaprasad, Victor Fung
+                </p>
+                <p>
+                  Pre-training GNNs for materials science using cheaply-computed structural fingerprints.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:16px;width:20%;vertical-align:middle">
                 <img src='images/wetland.png' width=100%>
               </td>
               <td style="padding:8px;width:80%;vertical-align:middle">
@@ -71,28 +138,6 @@
                 </p>
               </td>
             </tr>
-            <tr>
-              <td style="padding:16px;width:20%;vertical-align:middle">
-                <img src='images/matdeeplearn.png' width=100%>
-              </td>
-              <td style="padding:8px;width:80%;vertical-align:middle">
-                <a href="https://arxiv.org/pdf/2503.01227">
-                  <span class="papertitle">MatDeepLearn: A Deep Learning Framework for Materials Science</span>
-                </a>
-                <br>
-                <em>arXiv, 2024</em>
-                <br>
-                <a href="https://github.com/Fung-Lab/MatDeepLearn_dev">code</a> /
-                <a href="https://arxiv.org/pdf/2503.01227">paper</a>
-                <p></p>
-                <p>
-                  Shuyi Jia, <strong>Shitij Govil</strong>, Manav Ramaprasad, Victor Fung
-                </p>
-                <p>
-                  Pre-training GNNs for materials science using cheaply-computed structural fingerprints.
-                </p>
-              </td>
-            </tr>
           </tbody></table>
           <table style="width:100%;border:0px;border-spacing:0px;border-collapse:separate;margin-right:auto;margin-left:auto;"><tbody>
               <tr>
@@ -108,15 +153,14 @@
         <img src='images/mosaud.png' width=100%> <!-- Your project image -->
       </td>
       <td style="padding:8px;width:80%;vertical-align:middle">
-        <a href="https://github.com/aarontrinh02/mosaud"> <!-- Your project URL -->
+        <a href="papers/MoSAUD.pdf"> <!-- Your project URL -->
           <span class="papertitle">Efficient Skill-based Reinforcement Learning </span>
         </a>
         <br>
         <em>Course Project CS 8803 DRL</em><!-- e.g., CVPR 2024, arXiv 2023 -->
         <br>
-        <a href="https://github.com/aarontrinh02/mosaud">project page</a> <!-- Your project URL -->
-        <!--/
-        <a href="https://arxiv.org/abs/your_arxiv_id">arXiv</a> <!-- Your arXiv URL, if applicable -->
+        <a href="https://github.com/aarontrinh02/mosaud">code</a> /
+        <a href="papers/MoSAUD.pdf">paper</a>
         <p></p>
         <p>
           A model-based RL framework that extracts reusable skills from rewardless offline data and reuses the data by relabeling with an optimistic reward estimator for efficient exploration through the learned dynamics model
@@ -126,7 +170,7 @@
 
     <tr>
       <td style="padding:16px;width:20%;vertical-align:middle">
-        <img src='images/wta.png' width=100%>
+        <img src='images/white.png' width=100%>
       </td>
       <td style="padding:8px;width:80%;vertical-align:middle">
         <a href="papers/WTASAEMI.pdf">
@@ -135,7 +179,8 @@
         <br>
         <em>Course Project CS 7461 DL</em>
         <br>
-        <a href="https://github.com/sgovil5/SAE">project page</a>
+        <a href="https://github.com/sgovil5/SAE">code</a> /
+        <a href="papers/WTASAEMI.pdf">paper</a>
         <p></p>
         <p>
           A winner-take-all sparsity mechanism for sparse autoencoders in the context of mechanistic interpretability. Investigates feature-wise sparsity constraints for SAEs to prevent dead features.

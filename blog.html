@@ -1,0 +1,391 @@
+<!DOCTYPE HTML>
+<html lang="en">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+
+    <title>Blog | Shitij Govil</title>
+
+    <meta name="author" content="Shitij Govil">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="shortcut icon" href="images/favicon/favicon.ico" type="image/x-icon">
+    <link rel="stylesheet" type="text/css" href="stylesheet.css">
+    <style>
+      /* Blog post readability tweaks */
+      #content {
+        font-size: 16px;
+        line-height: 1.7;
+        padding-left: 8px;
+        padding-right: 8px;
+      }
+      /* Uniform body text size across elements (except headings) */
+      #content p,
+      #content li,
+      #content ul,
+      #content ol,
+      #content blockquote,
+      #content table,
+      #content th,
+      #content td,
+      #content code,
+      #content pre {
+        font-size: 1em;
+      }
+      /* Headings scale above the base size */
+      #content h1 { font-size: 1.8em; }
+      #content h2 { font-size: 1.5em; }
+      #content h3 { font-size: 1.25em; }
+      #content h4 { font-size: 1.1em; }
+      #content h5,
+      #content h6 { font-size: 1em; }
+      /* Ensure links match surrounding text size */
+      #content a {
+        font-size: inherit;
+      }
+      #content img {
+        display: block;
+        max-width: 70%;
+        height: auto;
+        margin: 16px auto;
+      }
+      /* MathJax inherits base size */
+      #content mjx-container {
+        font-size: 1em;
+      }
+      /* Preview fade-out and strong divider */
+      #preview-wrap {
+        position: relative;
+        overflow: hidden;
+      }
+      #preview-wrap::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 56px;
+        background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,1));
+        pointer-events: none;
+      }
+      .hr-strong {
+        border: 0;
+        border-top: 3px solid #000;
+        margin: 24px 0;
+      }
+      /* Post preview card */
+      .post-card {
+        display: block;
+        text-decoration: none;
+        color: inherit;
+        border: 2px solid #000;
+        border-radius: 6px;
+        padding: 16px;
+        background: #fff;
+      }
+      .post-card + .post-card {
+        margin-top: 16px;
+      }
+      .post-card:hover {
+        background: #fafafa;
+      }
+      .post-title {
+        font-weight: 700;
+        font-size: 1.2em;
+        margin: 0 0 8px 0;
+      }
+      .post-summary p {
+        margin: 0 0 8px 0;
+      }
+    </style>
+
+    <script>
+      window.MathJax = {
+        tex: {
+          inlineMath: [['\\(', '\\)'], ['$', '$']],
+          displayMath: [['\\[', '\\]'], ['$$', '$$']],
+          processEscapes: true
+        },
+        options: {
+          skipHtmlTags: ['script','noscript','style','textarea','pre','code']
+        }
+      };
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  </head>
+
+  <body>
+    <div class="navbar" style="width:100%;max-width:1200px;margin-right:auto;margin-left:auto;padding:12px 0;text-align:center;">
+      <a href="index.html">Home</a> &nbsp;/&nbsp; <a href="blog.html">Blog</a>
+    </div>
+
+    <table style="width:100%;max-width:1200px;border:0px;border-spacing:0px;border-collapse:separate;margin-right:auto;margin-left:auto;"><tbody>
+      <tr>
+        <td style="padding:16px;width:100%;vertical-align:top">
+          <h2 style="margin-top:0">Blog</h2>
+          <div id="post-meta" style="color:#666;font-size:0.9em;margin-bottom:12px;"></div>
+          <div id="content"></div>
+          <div id="empty-state" style="margin-top:16px;color:#444;"></div>
+        </td>
+      </tr>
+    </tbody></table>
+
+    <script>
+      (function () {
+        const params = new URLSearchParams(window.location.search);
+        const mdPath = params.get('md');
+        const contentEl = document.getElementById('content');
+        const emptyEl = document.getElementById('empty-state');
+        const metaEl = document.getElementById('post-meta');
+
+        function setEmptyMessage() {
+          emptyEl.innerHTML =
+            'Provide a markdown file via the "md" query parameter. Examples: ' +
+            '<div><a href="blog.html?md=posts/SF-Blog.md">Successor Features Blog</a></div>'
+        }
+
+        if (!mdPath) {
+          // Clickable preview cards for posts; first ~5 lines per post
+          var posts = [
+            { path: 'posts/SF-Blog.md' }
+          ];
+
+          metaEl.textContent = 'Latest posts';
+          emptyEl.textContent = 'Loading...';
+
+          function htmlEscape(s) {
+            return String(s).replace(/[&<>"']/g, function (ch) {
+              return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
+            });
+          }
+          function deriveTitle(mdText, fallback) {
+            var lines = mdText.split(/\r?\n/);
+            for (var k = 0; k < lines.length; k++) {
+              var m = lines[k].match(/^#{1,6}\s+(.+)/);
+              if (m) {
+                var t = m[1].trim();
+                t = t.replace(/^Section\s+\d+\s*:\s*/i, '').trim();
+                return t;
+              }
+            }
+            return fallback || '';
+          }
+          function firstContentLines(mdText, count) {
+            var lines = mdText.split(/\r?\n/);
+            var out = [];
+            var i = 0;
+            // Skip leading heading lines
+            while (i < lines.length && /^#{1,6}\s+/.test(lines[i])) i++;
+            // Collect next non-empty up to count lines
+            for (; i < lines.length && out.length < count; i++) {
+              out.push(lines[i]);
+            }
+            return out.join('\n');
+          }
+          function protectMath(md) {
+            var placeholders = [];
+            function makeToken(content) {
+              var token = '@@MATH_' + placeholders.length + '@@';
+              placeholders.push(content);
+              return token;
+            }
+            function extractDisplayMath(text) {
+              var out = '';
+              var i = 0;
+              while (i < text.length) {
+                if (text[i] === '$' && text[i + 1] === '$') {
+                  var j = i + 2;
+                  while (j < text.length) {
+                    if (text[j] === '\\') { j += 2; continue; }
+                    if (text[j] === '$' && text[j + 1] === '$') { j += 2; break; }
+                    j++;
+                  }
+                  out += makeToken(text.slice(i, j));
+                  i = j;
+                } else {
+                  out += text[i++];
+                }
+              }
+              return out;
+            }
+            function extractInlineMath(text) {
+              var out = '';
+              var i = 0;
+              while (i < text.length) {
+                if (text[i] === '$' && text[i + 1] !== '$') {
+                  var j = i + 1;
+                  while (j < text.length) {
+                    if (text[j] === '\\') { j += 2; continue; }
+                    if (text[j] === '$') { j++; break; }
+                    j++;
+                  }
+                  out += makeToken(text.slice(i, j));
+                  i = j;
+                } else {
+                  out += text[i++];
+                }
+              }
+              return out;
+            }
+            var protectedMd = extractInlineMath(extractDisplayMath(md));
+            return { protectedMd: protectedMd, placeholders: placeholders };
+          }
+
+          Promise.all(posts.map(function (p) {
+            return fetch(p.path, { cache: 'no-cache' })
+              .then(function (res) {
+                if (!res.ok) throw new Error('Failed to load markdown: ' + res.status);
+                return res.text();
+              })
+              .then(function (md) {
+                var baseName = p.path.split('/').pop().replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ');
+                var fallbackTitle = baseName.replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+                var title = deriveTitle(md, fallbackTitle);
+                var previewMd = firstContentLines(md, 3);M
+
+                var math = protectMath(previewMd);
+                if (window.marked && marked.setOptions) {
+                  marked.setOptions({ breaks: false });
+                }
+                var summaryHtml = window.marked ? marked.parse(math.protectedMd) : math.protectedMd;
+                math.placeholders.forEach(function (original, idx) {
+                  var token = '@@MATH_' + idx + '@@';
+                  summaryHtml = summaryHtml.split(token).join(original);
+                });
+
+                var linkHref = 'blog.html?md=' + encodeURIComponent(p.path);
+                return ''
+                  + '<a class="post-card" href="' + linkHref + '">'
+                  +   '<div class="post-title">' + htmlEscape(title) + '</div>'
+                  +   '<div class="post-summary">' + summaryHtml + '</div>'
+                  + '</a>';
+              });
+          }))
+          .then(function (cards) {
+            contentEl.innerHTML = cards.join('');
+            emptyEl.textContent = '';
+            if (window.MathJax && window.MathJax.typesetPromise) {
+              window.MathJax.typesetPromise();
+            }
+          })
+          .catch(function (err) {
+            var hint = '';
+            if (window.location && window.location.protocol === 'file:') {
+              hint = ' — This page is opened directly from your filesystem. Most browsers block fetch() for local files. Please serve the site locally (e.g., <code>python -m http.server</code> or <code>npx http-server</code>) or view it via GitHub Pages.';
+            }
+            emptyEl.innerHTML = 'Error: ' + err.message + hint;
+          });
+
+          return;
+        }
+
+        metaEl.textContent = mdPath;
+        emptyEl.textContent = 'Loading...';
+
+        fetch(mdPath, { cache: 'no-cache' })
+          .then(function (res) {
+            if (!res.ok) throw new Error('Failed to load markdown: ' + res.status);
+            return res.text();
+          })
+          .then(function (md) {
+            // Protect LaTeX from the Markdown parser, then restore after parsing.
+            var placeholders = [];
+            function makeToken(content) {
+              var token = '@@MATH_' + placeholders.length + '@@';
+              placeholders.push(content);
+              return token;
+            }
+            function extractDisplayMath(text) {
+              var out = '';
+              var i = 0;
+              while (i < text.length) {
+                if (text[i] === '$' && text[i + 1] === '$') {
+                  var j = i + 2;
+                  while (j < text.length) {
+                    if (text[j] === '\\') { j += 2; continue; }
+                    if (text[j] === '$' && text[j + 1] === '$') { j += 2; break; }
+                    j++;
+                  }
+                  out += makeToken(text.slice(i, j));
+                  i = j;
+                } else {
+                  out += text[i++];
+                }
+              }
+              return out;
+            }
+            function extractInlineMath(text) {
+              var out = '';
+              var i = 0;
+              while (i < text.length) {
+                if (text[i] === '$' && text[i + 1] !== '$') {
+                  var j = i + 1;
+                  while (j < text.length) {
+                    if (text[j] === '\\') { j += 2; continue; }
+                    if (text[j] === '$') { j++; break; }
+                    j++;
+                  }
+                  out += makeToken(text.slice(i, j));
+                  i = j;
+                } else {
+                  out += text[i++];
+                }
+              }
+              return out;
+            }
+
+            var protectedMd = extractInlineMath(extractDisplayMath(md));
+
+            // Configure marked for safer output by default.
+            if (window.marked && marked.setOptions) {
+              marked.setOptions({
+                breaks: false
+              });
+            }
+            var html = window.marked ? marked.parse(protectedMd) : protectedMd;
+
+            // Restore LaTeX delimiters
+            placeholders.forEach(function (original, idx) {
+              var token = '@@MATH_' + idx + '@@';
+              html = html.split(token).join(original);
+            });
+
+            contentEl.innerHTML = html;
+
+            // Resolve relative resource URLs (images/links) against the markdown file's directory
+            try {
+              var baseDir = mdPath;
+              var lastSlash = baseDir.lastIndexOf('/');
+              baseDir = lastSlash >= 0 ? baseDir.slice(0, lastSlash + 1) : '';
+              function isRelative(url) {
+                return !!url && !/^(?:[a-z]+:)?\/\//i.test(url) && url.charAt(0) !== '/' && url.charAt(0) !== '#';
+              }
+              Array.prototype.forEach.call(contentEl.querySelectorAll('img'), function (img) {
+                var src = img.getAttribute('src');
+                if (isRelative(src)) img.setAttribute('src', baseDir + src);
+              });
+              Array.prototype.forEach.call(contentEl.querySelectorAll('a'), function (a) {
+                var href = a.getAttribute('href');
+                if (isRelative(href)) a.setAttribute('href', baseDir + href);
+              });
+            } catch (e) {
+              // ignore path rewrite errors
+            }
+
+            emptyEl.textContent = '';
+            if (window.MathJax && window.MathJax.typesetPromise) {
+              window.MathJax.typesetPromise();
+            }
+          })
+          .catch(function (err) {
+            var hint = '';
+            if (window.location && window.location.protocol === 'file:') {
+              hint = ' — This page is opened directly from your filesystem. Most browsers block fetch() for local files. Please serve the site locally (e.g., <code>python -m http.server</code> or <code>npx http-server</code>) or view it via GitHub Pages.';
+            }
+            emptyEl.innerHTML = 'Error: ' + err.message + hint;
+          });
+      })();
+    </script>
+  </body>
+</html>
+
+

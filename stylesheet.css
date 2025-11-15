@@ -81,12 +81,12 @@
   p,
   a {
     font-family: 'Lato', Verdana, Helvetica, sans-serif;
-    font-size: 14px;
+    font-size: 18px;
   }
   
   strong {
     font-family: 'Lato', Verdana, Helvetica, sans-serif;
-    font-size: 14px;
+    font-size: 18px;
   }
   
   h2 {
@@ -139,4 +139,8 @@
       padding: 20px;
       display: inline-block;
       border-radius: 10px;
+  }
+  
+  .navbar a {
+    font-size: 32px;
   }
