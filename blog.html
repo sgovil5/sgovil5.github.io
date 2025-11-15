@@ -240,7 +240,7 @@
                 var baseName = p.path.split('/').pop().replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ');
                 var fallbackTitle = baseName.replace(/\b\w/g, function (c) { return c.toUpperCase(); });
                 var title = deriveTitle(md, fallbackTitle);
-                var previewMd = firstContentLines(md, 3);M
+                var previewMd = firstContentLines(md, 3);
 
                 var math = protectMath(previewMd);
                 if (window.marked && marked.setOptions) {
