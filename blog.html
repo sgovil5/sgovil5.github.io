@@ -9,93 +9,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="shortcut icon" href="images/favicon/favicon.ico" type="image/x-icon">
     <link rel="stylesheet" type="text/css" href="stylesheet.css">
-    <style>
-      /* Blog post readability tweaks */
-      #content {
-        font-size: 16px;
-        line-height: 1.7;
-        padding-left: 8px;
-        padding-right: 8px;
-      }
-      /* Uniform body text size across elements (except headings) */
-      #content p,
-      #content li,
-      #content ul,
-      #content ol,
-      #content blockquote,
-      #content table,
-      #content th,
-      #content td,
-      #content code,
-      #content pre {
-        font-size: 1em;
-      }
-      /* Headings scale above the base size */
-      #content h1 { font-size: 1.8em; }
-      #content h2 { font-size: 1.5em; }
-      #content h3 { font-size: 1.25em; }
-      #content h4 { font-size: 1.1em; }
-      #content h5,
-      #content h6 { font-size: 1em; }
-      /* Ensure links match surrounding text size */
-      #content a {
-        font-size: inherit;
-      }
-      #content img {
-        display: block;
-        max-width: 70%;
-        height: auto;
-        margin: 16px auto;
-      }
-      /* MathJax inherits base size */
-      #content mjx-container {
-        font-size: 1em;
-      }
-      /* Preview fade-out and strong divider */
-      #preview-wrap {
-        position: relative;
-        overflow: hidden;
-      }
-      #preview-wrap::after {
-        content: "";
-        position: absolute;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        height: 56px;
-        background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,1));
-        pointer-events: none;
-      }
-      .hr-strong {
-        border: 0;
-        border-top: 3px solid #000;
-        margin: 24px 0;
-      }
-      /* Post preview card */
-      .post-card {
-        display: block;
-        text-decoration: none;
-        color: inherit;
-        border: 2px solid #000;
-        border-radius: 6px;
-        padding: 16px;
-        background: #fff;
-      }
-      .post-card + .post-card {
-        margin-top: 16px;
-      }
-      .post-card:hover {
-        background: #fafafa;
-      }
-      .post-title {
-        font-weight: 700;
-        font-size: 1.2em;
-        margin: 0 0 8px 0;
-      }
-      .post-summary p {
-        margin: 0 0 8px 0;
-      }
-    </style>
 
     <script>
       window.MathJax = {
@@ -114,20 +27,24 @@
   </head>
 
   <body>
-    <div class="navbar" style="width:100%;max-width:1200px;margin-right:auto;margin-left:auto;padding:12px 0;text-align:center;">
-      <a href="index.html">Home</a> &nbsp;/&nbsp; <a href="blog.html">Blog</a>
-    </div>
+    <div id="overlay">
+      <header>
+        <h1>Shitij Govil</h1>
+        <nav>
+          <a href="index.html" class="fancy-link">home</a>
+          <a href="blog.html" class="fancy-link">blog</a>
+        </nav>
+      </header>
 
-    <table style="width:100%;max-width:1200px;border:0px;border-spacing:0px;border-collapse:separate;margin-right:auto;margin-left:auto;"><tbody>
-      <tr>
-        <td style="padding:16px;width:100%;vertical-align:top">
-          <h2 style="margin-top:0">Blog</h2>
-          <div id="post-meta" style="color:#666;font-size:0.9em;margin-bottom:12px;"></div>
+      <main>
+        <section id="blog">
+          <h2>blog</h2>
+          <div id="post-meta" style="color:var(--muted);font-size:0.95em;margin:10px 0 14px;"></div>
           <div id="content"></div>
-          <div id="empty-state" style="margin-top:16px;color:#444;"></div>
-        </td>
-      </tr>
-    </tbody></table>
+          <div id="empty-state" style="margin-top:16px;color:var(--muted);"></div>
+        </section>
+      </main>
+    </div>
 
     <script>
       (function () {
@@ -146,7 +63,7 @@
         if (!mdPath) {
           // Clickable preview cards for posts; first ~5 lines per post
           var posts = [
-            { path: 'posts/SF-Blog.md' }
+            { path: 'posts/SF-Blog.md', published: 'November 2025' }
           ];
 
           metaEl.textContent = 'Latest posts';
@@ -253,9 +170,11 @@
                 });
 
                 var linkHref = 'blog.html?md=' + encodeURIComponent(p.path);
+                var dateHtml = (p.published ? ('<div class="post-date">Published: ' + htmlEscape(p.published) + '</div>') : '');
                 return ''
                   + '<a class="post-card" href="' + linkHref + '">'
                   +   '<div class="post-title">' + htmlEscape(title) + '</div>'
+                  +   dateHtml
                   +   '<div class="post-summary">' + summaryHtml + '</div>'
                   + '</a>';
               });
@@ -278,7 +197,19 @@
           return;
         }
 
-        metaEl.textContent = mdPath;
+        // Post view: show published date (if known) instead of raw path
+        var postsIndex = [
+          { path: 'posts/SF-Blog.md', published: 'November 2025' }
+        ];
+        var matched = null;
+        for (var i = 0; i < postsIndex.length; i++) {
+          if (postsIndex[i].path === mdPath) { matched = postsIndex[i]; break; }
+        }
+        if (matched && matched.published) {
+          metaEl.textContent = 'Published: ' + matched.published;
+        } else {
+          metaEl.textContent = mdPath;
+        }
         emptyEl.textContent = 'Loading...';
 
         fetch(mdPath, { cache: 'no-cache' })
