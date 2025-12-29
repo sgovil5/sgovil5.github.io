@@ -3,7 +3,7 @@ Many real-world systems are nonlinear (e.g. fluids, robots, biology), and there 
 1. Long-term future state prediction
 2. Control through feedback
 3. Interpretability of a system's behavior
-Modern systems have 2 main challenges: (1) Nonlinearity—well-developed tools for linear dynamic analysis can't be used. (2) Unknown dynamics—the lack of governing equations for realistic systems means all models are merely approximations.
+Modern systems have 2 main challenges: (i) Nonlinearity—well-developed tools for linear dynamic analysis can't be used. (ii) Unknown dynamics—the lack of governing equations for realistic systems means all models are merely approximations.
 
 Koopman operators promise to take nonlinear dynamics and move them to a space where linear techniques can be used. Why linear?
 
@@ -17,8 +17,8 @@ $$\mathcal{K}_{\Delta t}g(x_k) = g(F_{\Delta t}(x_k)) = g(x_{k+1})$$
 So the Koopman operator defines a system that advances the observation of state $g_k$ to the next time step. This operator is also linear, which is inherited from the linearity of the addition operation in function spaces.  
 
 Although linear, working in infinite dimensions is difficult. Instead of capturing the evolution of all measurement functions, applied Koopman analysis aims to use key measurement functions that evolve linearly with dynamics. One example is eigenfunctions, so we can replace $g$ with an eigenfunction $\phi(x)$, and we get:
-$$\mathcal{K}_{\Delta t}\phi(x_k) = \phi(x_{k+1}) = \lambda \phi(x)$$
-The key takeaway here is that nonlinear dynamics become completely linear in eigenfunction coordinates. An example is that any conserved quantity of a system is a Koopman eigenfunction corresponding to $\lambda=0$.
+$$\mathcal{K}_{\Delta t}\phi(x_k) = \phi(x_{k+1}) = \lambda \phi(x_k)$$
+The key takeaway here is that Koopman theory represents nonlinear state evolution as linear evolution of observables (often eigenvalues). An example is that any conserved quantity of a system is a Koopman eigenfunction corresponding to $\lambda=1$.
 
 We can take multiple measurements of a system and arrange the observables into a vector $${g}({x})
 = \begin{bmatrix}
