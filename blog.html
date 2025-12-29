@@ -63,7 +63,8 @@
         if (!mdPath) {
           // Clickable preview cards for posts; first ~5 lines per post
           var posts = [
-            { path: 'posts/SF-Blog.md', published: 'November 2025' }
+            { path: 'posts/Koopman-Blog.md', published: 'December 2025'},
+            { path: 'posts/SF-Blog.md', published: 'November 2025' },
           ];
 
           metaEl.textContent = 'Latest posts';
@@ -199,6 +200,7 @@
 
         // Post view: show published date (if known) instead of raw path
         var postsIndex = [
+          { path: 'posts/Koopman-Blog.md', published: 'December 2025'},
           { path: 'posts/SF-Blog.md', published: 'November 2025' }
         ];
         var matched = null;
