@@ -375,3 +375,5 @@ exact for any data — §3.1). We do **not** rely on that derivation — the vel
 know-how (two-timescale fake-model updates, per-sample gradient normalization, optional GAN coverage
 term) transfers for free. The branch keeps the historical `dmd` tag in its name; the method here is
 velocity-field matching.
+
+<!-- synctest-7f3a9c (temporary end-to-end auto-sync check; will be removed) -->
