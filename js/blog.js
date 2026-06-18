@@ -6,6 +6,7 @@
 
   // Canonical post index (used for both list + metadata)
   const postsIndex = [
+    { path: 'posts/DMDRenoise.md', slug: 'dmd-renoise', published: 'June 2026' },
     { path: 'posts/Koopman.md', slug: 'Koopman', published: 'December 2025' },
     { path: 'posts/SF.md', slug: 'SF', published: 'November 2025' }
   ];
