@@ -17,10 +17,12 @@ has been run before in this codebase (the `feat/dmd-renoise-policy` branch is ac
 sample-space MSE/energy loss, not a two-network velocity-difference match).
 
 Velocity-field matching is rigorous on its own — flow matching: *equal velocity fields ⟺ equal
-distributions* (§3) — needing no score, no KL, and no Gaussian-data assumption. The one subtlety to
-respect is the **weighting across noise levels `t`**: a unit velocity mismatch reflects different
-distributional discrepancy at different `t` (near pure noise it is nearly uninformative), so the raw,
-uniform velocity difference over-weights the wrong band and must be normalized / mid-banded (§3.3).
+distributions* (§3) — needing no score, no KL, and no Gaussian-data assumption. We match the
+**velocity fields directly** (in $v$, not $\hat x_0$): the objective is the plain velocity-matching
+loss with **unit weighting** — the same form the base was trained with. There is no heuristic weighting
+function; the only knob is the **noise-level band** $t\in[t_{\text{lo}},t_{\text{hi}}]$ we sample over,
+and that is a *validity* constraint (both nets are unreliable at exact data and pure noise), not a
+tuned weight (§3.3).
 
 The four refinements that separate "sound" from "will actually work":
 
@@ -28,8 +30,10 @@ The four refinements that separate "sound" from "will actually work":
    window* (renoised context tokens **+** freshly generated continuation) and match its joint
    distribution to real data windows. On-policy contexts carry the compounding/covariate-shift
    signal that single-window *conditional* losses are blind to.
-2. **Get the weighting right** — the raw velocity difference over-weights `t→1`; normalize per-sample
-   (the denoiser / `x̂₀`-space form is stablest) and restrict `t` to an informative mid-band.
+2. **Match velocities directly, no heuristic weighting** — inject $g = v_{\text{real}}-v_{\text{fake}}$
+   with unit weight (not the $\hat x_0$-difference, not a per-sample normalization); the sole knob is
+   the mid-band $t\in[t_{\text{lo}},t_{\text{hi}}]$, whose lower cut bounds the small-`t` amplification
+   and whose upper cut drops the uninformative near-noise end (§3.3).
 3. **Only the distribution-matching gradient may touch τ** — never let an FM/reconstruction loss
    backprop into τ (the documented `τ→0` "trust-the-warm-start" collapse, the *Trap*).
 4. **Gate on deployed metrics, on a heterogeneous task** — here *gate* = the accept / checkpoint-
