@@ -19,10 +19,9 @@ sample-space MSE/energy loss, not a two-network velocity-difference match).
 Velocity-field matching is rigorous on its own — flow matching: *equal velocity fields ⟺ equal
 distributions* (§3) — needing no score, no KL, and no Gaussian-data assumption. We match the
 **velocity fields directly** (in $v$, not $\hat x_0$): the objective is the plain velocity-matching
-loss with **unit weighting** — the same form the base was trained with. There is no heuristic weighting
-function; the only knob is the **noise-level band** $t\in[t_{\text{lo}},t_{\text{hi}}]$ we sample over,
-and that is a *validity* constraint (both nets are unreliable at exact data and pure noise), not a
-tuned weight (§3.3).
+loss with **unit weighting over all noise levels** $t\sim\mathcal{U}[0,1]$ — the same form the base was
+trained with. There is no heuristic weighting function and no $t$-band by default; restricting $t$ to a
+mid-band is a deferred lever, used only if the small-$t$ tail proves to be a failure mode (§3.3).
 
 The four refinements that separate "sound" from "will actually work":
 
@@ -31,9 +30,9 @@ The four refinements that separate "sound" from "will actually work":
    distribution to real data windows. On-policy contexts carry the compounding/covariate-shift
    signal that single-window *conditional* losses are blind to.
 2. **Match velocities directly, no heuristic weighting** — inject $g = v_{\text{real}}-v_{\text{fake}}$
-   with unit weight (not the $\hat x_0$-difference, not a per-sample normalization); the sole knob is
-   the mid-band $t\in[t_{\text{lo}},t_{\text{hi}}]$, whose lower cut bounds the small-`t` amplification
-   and whose upper cut drops the uninformative near-noise end (§3.3).
+   with unit weight over **all** noise levels $t\sim\mathcal{U}[0,1]$ (not the $\hat x_0$-difference, not
+   a per-sample normalization); no $t$-band by default — a mid-band is a deferred lever if the small-`t`
+   tail misbehaves (§3.3).
 3. **Only the distribution-matching gradient may touch τ** — never let an FM/reconstruction loss
    backprop into τ (the documented `τ→0` "trust-the-warm-start" collapse, the *Trap*).
 4. **Gate on deployed metrics, on a heterogeneous task** — here *gate* = the accept / checkpoint-
@@ -144,19 +143,20 @@ Both sides are native model outputs. *(Optional score connection, never used bel
 
 **Objective (velocity form — what we implement).** Minimize the velocity-field mismatch on the rollout support,
 
-$$\mathcal{D}(\varphi) = \mathbb{E}_{t\sim\mathcal{U}[t_{\text{lo}},t_{\text{hi}}]}\,\mathbb{E}_{x\sim p_t^{\text{gen}}}\Big[\, \big\lVert v_{\text{real}}(x,t) - v_{\text{fake}}(x,t) \big\rVert^2 \,\Big] \;\ge\; 0,$$
+$$\mathcal{D}(\varphi) = \mathbb{E}_{t\sim\mathcal{U}[0,1]}\,\mathbb{E}_{x\sim p_t^{\text{gen}}}\Big[\, \big\lVert v_{\text{real}}(x,t) - v_{\text{fake}}(x,t) \big\rVert^2 \,\Big] \;\ge\; 0,$$
 
-with **unit weighting** — this is exactly the object the §3.0 characterization is about, and it is zero
-exactly when the velocity fields coincide on the rollout support $\Rightarrow p_{\text{gen}}=p_{\text{data}}$.
+with **unit weighting over all noise levels** — this is exactly the object the §3.0 characterization is
+about, and it is zero exactly when the velocity fields coincide on the rollout support $\Rightarrow p_{\text{gen}}=p_{\text{data}}$.
 Here $v_{\text{real}}$ comes from the **frozen base** (the real velocity field, for free) and $v_{\text{fake}}$ from a
 second flow net tracked online on the current rollout (§4). Each velocity is read off the raw `pred_x0`
-output via $v=(x-\hat x_0)/t$ (§3.1) — the $1/t$ is the *exact* identity, not a weighting, and the
-mid-band keeps $t$ away from $0$ so it is well-conditioned.
+output via $v=(x-\hat x_0)/t$ (§3.1) — the $1/t$ is the *exact* identity, not a weighting (the numerical
+floor on $t$, §3.3, just keeps it from dividing by ~$0$).
 
 *Why velocity, not $\hat x_0$:* the two losses differ only by a $t$-profile — $\lVert\hat x_{0,\text{real}}-\hat x_{0,\text{fake}}\rVert^2 = t^2\lVert v_{\text{real}}-v_{\text{fake}}\rVert^2$, so "denoiser-space, weight 1" *is* "velocity-space, weight $t^2$." Choosing the
 representation **is** choosing the weighting; we pick velocity because it is the canonical variable the
-characterization speaks in, and weight 1 there needs no heuristic $w(t)$. The only price is a relative
-$1/t$ emphasis toward small $t$ — which is *where the informative discrepancies live* (§3.3) — bounded by $t_{\text{lo}}$.
+characterization speaks in, and weight 1 there needs no heuristic $w(t)$. Its one quirk — a relative
+$1/t$ emphasis toward small $t$, which is *where the informative discrepancies live* (§3.3) — is left
+unrestricted by default; if it manifests as a failure mode (a noisy small-$t$ tail) the $t$-band is the lever (§3.3).
 
 **Policy gradient (velocity-difference).** Hold both velocity fields fixed (stop-grad: $v_{\text{real}}$ frozen,
 $v_{\text{fake}}$ separately fit) and move generated samples to shrink the mismatch. Inject on each sample
@@ -180,25 +180,27 @@ not the literal operand order. **Stop-grad both nets' weights** — we use their
 would carry — a deliberate, standard simplification (lower variance and cost; same fixed point
 $v_{\text{fake}}=v_{\text{real}}$).
 
-### 3.3 The only knob: the noise-level band $[t_{\text{lo}},t_{\text{hi}}]$
+### 3.3 The `t`-distribution: full range by default, band as a deferred lever
 
 There is no heuristic weighting function. The velocity objective fixes the $t$-profile canonically
-(weight 1, §3.2); the one thing we set is the **band of $t$ we sample over**, and that is a validity
-constraint, not a tuned weight. Two ends to clip:
+(weight 1, §3.2); the only remaining choice is the **distribution we draw $t$ from**, and that is a
+sampling/validity choice, not a tuned weight. **Default: sample all noise levels,** $t\sim\mathcal{U}[0,1]$ —
+the simplest, assumption-free choice; we add structure only if the data demands it.
 
-1. **Upper cut $t_{\text{hi}}$ (drop near-noise).** Near $t\to1$ both $p_t^{\text{gen}},p_t^{\text{data}}$ are heavily
-   smoothed toward the same $\mathcal{N}(0,I)$, so a velocity difference there says little about $p_{\text{data}}$'s
-   structure — uninformative. The informative discrepancies (manifold bias, lost coherence) live nearer
-   $t\to0$, which the velocity loss already emphasizes (its $1/t$ relative to the denoiser difference puts
-   weight on **small $t$ / near data**, exactly the right direction).
-2. **Lower cut $t_{\text{lo}}$ (bound the small-$t$ amplification).** That same $1/t$ means $g=v_{\text{real}}-v_{\text{fake}}$
-   grows as $t\to0$ and can get noisy if either net is shaky near the data manifold; $t_{\text{lo}}$ caps the
-   factor at $1/t_{\text{lo}}$ (e.g. $t_{\text{lo}}=0.1\Rightarrow{\le}10\times$). It also sits above
-   `numerical_stabilizer` ($\approx10^{-4}$, where `flow.py` clamps $t$), so we are never in the truncated regime.
+Two known properties to keep in mind (neither is restricted by default):
 
-So sample $t\sim\mathcal{U}[t_{\text{lo}},t_{\text{hi}}]$ (start $[0.1,0.9]$, tune as an ablation). If the gradient
-*scale* is ever unstable, the principled fix is **global grad-norm clipping** (a standard optimizer device)
-— **not** a per-sample normalization baked into the loss, which would silently reintroduce a heuristic $t$-weight.
+1. **Near-noise is uninformative.** Near $t\to1$ both $p_t^{\text{gen}},p_t^{\text{data}}$ are heavily smoothed
+   toward the same $\mathcal{N}(0,I)$, so a velocity difference there says little about $p_{\text{data}}$'s structure.
+   The informative discrepancies (manifold bias, lost coherence) live nearer $t\to0$ — which the velocity
+   loss already emphasizes (its $1/t$ relative to the denoiser difference puts weight on **small $t$ / near data**, the right direction).
+2. **Small-$t$ amplification.** That same $1/t$ means $g=v_{\text{real}}-v_{\text{fake}}$ grows as $t\to0$ and can get
+   noisy if either net is shaky near the data manifold. Two cheap guards we keep on from the start: a **numerical
+   floor** (draw $t\sim\mathcal{U}[\epsilon,1{-}\epsilon]$ with $\epsilon$ at/above `numerical_stabilizer` $\approx10^{-4}$, so we never literally divide by $0$) and **global grad-norm clipping** (a standard optimizer device — **not** a per-sample loss normalization, which would sneak a $t$-weight back in).
+
+**The deferred lever.** If the small-$t$ tail shows up as an actual failure mode (gradient-scale
+instability, divergence traceable to near-data samples), restrict to a mid-band $t\sim\mathcal{U}[t_{\text{lo}},t_{\text{hi}}]$
+(e.g. $[0.1,0.9]$): $t_{\text{lo}}$ caps the factor at $1/t_{\text{lo}}$, $t_{\text{hi}}$ drops the uninformative near-noise end.
+This is an **ablation (§7), not a default** — add it only on evidence.
 
 ### 3.4 The frozen base is the real velocity field — and where it's trustworthy
 
@@ -236,7 +238,7 @@ $\tau$ enters $W$ **both** through the reparameterized renoise $w=(1-\tau)\hat y
 **(2) Update `p_gen` (the fake denoiser).** Take $K_{\text{fake}}$ steps of the standard FM / `pred_x0` loss on **stop-grad** rollout windows (shared-$t$ noising). Two-timescale: $K_{\text{fake}}\approx 5$ per policy step. Draw windows from the short on-policy FIFO buffer to lower variance without reintroducing staleness.
 
 **(3) Update the policy $\varphi$.** For a (truncated-BPTT) set of windows $W$ from step (1):
-- sample a shared mid-band level $t\sim\mathcal{U}[t_{\text{lo}},t_{\text{hi}}]$ and noise the window, $W_t = q_{\text{sample}}(W,t)$;
+- sample a shared level over the full range $t\sim\mathcal{U}[\epsilon,1{-}\epsilon]$ ($\epsilon\approx$ `numerical_stabilizer`; no mid-band by default, §3.3) and noise the window, $W_t = q_{\text{sample}}(W,t)$;
 - query both nets with weights **stop-gradded** at $(W_t,t)$ — read $\hat x_{0,\text{real}},\hat x_{0,\text{fake}}$ from `pred_x0` and convert each to velocity $v=(W_t-\hat x_0)/t$ (the $1/t$ is the exact identity, §3.1; $t$ is mid-band so well-conditioned);
 - form the velocity-field-mismatch gradient (§3.2),
 $$g \;=\; v_{\text{real}}(W_t,t) - v_{\text{fake}}(W_t,t),$$
