@@ -78,6 +78,12 @@ preserving the temporal information needed for coherence** — exactly the state
 observation — no hand-engineered features** (no lead-time/time-in-episode/ŷ-summary). The net reads
 the same state the base conditions on and emits τ.
 
+**Geometry (locked, from configs).** 1-D scalar token (`observation_shape: [1]`, no actions);
+episode = 10 frames; `context_frames = 1`, `open_loop_horizon = 1`, sliding causal window. The match
+**window** `W = [1 renoised context token ; 1 freshly generated token]` (2 tokens). Free-running
+deployment gate over `prediction_horizon = 5` frames. Per-frame sampler **NFE=3**
+(`update_sampling_timesteps=3`).
+
 ---
 
 ## 2. Why this is the right objective (and prior ones weren't)
@@ -235,7 +241,7 @@ Then repeat steps (1)–(4):
 $$W = \big[\,\text{renoised context tokens}\;;\;\text{freshly generated continuation}\,\big].$$
 $\tau$ enters $W$ **both** through the reparameterized renoise $w=(1-\tau)\hat y+\tau\varepsilon$ **and** through the `t2` conditioning — keep both differentiable.
 
-**(2) Update `p_gen` (the fake denoiser).** Take $K_{\text{fake}}$ steps of the standard FM / `pred_x0` loss on **stop-grad** rollout windows (shared-$t$ noising). Two-timescale: $K_{\text{fake}}\approx 5$ per policy step. Draw windows from the short on-policy FIFO buffer to lower variance without reintroducing staleness.
+**(2) Update `p_gen` (the fake denoiser).** Take $K_{\text{fake}}$ steps of the standard FM / `pred_x0` loss on **stop-grad** rollout windows (shared-$t$ noising). Two-timescale: $K_{\text{fake}}=5$ per policy step (locked). Draw windows from the short on-policy FIFO buffer to lower variance without reintroducing staleness.
 
 **(3) Update the policy $\varphi$.** For a (truncated-BPTT) set of windows $W$ from step (1):
 - sample a shared level over the full range $t\sim\mathcal{U}[\epsilon,1{-}\epsilon]$ ($\epsilon\approx$ `numerical_stabilizer`; no mid-band by default, §3.3) and noise the window, $W_t = q_{\text{sample}}(W,t)$;
@@ -316,11 +322,19 @@ flow-mog/adaptive-renoise checkout and need porting — see the project memory).
 
 ## 7. Experiment plan (staged, de-risked)
 
-- **Stage 0 — machinery + sanity (global scalar τ).** Single learned global `τ` via the full
-  velocity-matching loop on the random walk. Expect `τ→1`, W1 ≈ fixed-τ=1. *Gate: does the two-network
-  velocity gradient recover the known distributional optimum?* If not, fix weighting/fake-lag first.
-- **Stage 1 — per-token policy on a heterogeneous task.** Port MoG; train the per-token `τ_φ`. *Gate:
+**Current scope (this run): random walk only — no MoG port.** This is a **Stage-0 machinery/sanity
+run**. On the homogeneous random walk the distributional optimum is the trivial `τ=1` and *no policy
+can beat fixed-τ=1 by construction* (§6). So the success criterion here is **not** "learned renoise
+wins" — it is "the two-network velocity gradient recovers `τ≈1` and matches fixed-τ=1 W1." A genuine
+*win* requires a heterogeneous task (MoG), which is **deferred** (Stage 1 below).
+
+- **Stage 0 — machinery + sanity (this run).** Run the full velocity-matching loop on the random
+  walk with the small `τ_φ(context, current obs)` policy (geometry: §1/§8 — 2-token window, NFE=3,
+  K_fake=5). Expect `τ→1`, W1 ≈ fixed-τ=1. *Gate: does the two-network velocity gradient recover the
+  known distributional optimum?* If not, fix weighting/fake-lag first.
+- **Stage 1 — per-token policy on a heterogeneous task (DEFERRED).** Port MoG; train `τ_φ`. *Gate:
   beat the best fixed/banded τ on deployed W1 (the bar prior single-window policies could not clear).*
+  Not in scope for the current run.
 - **Stage 2 — both bases.** Repeat for (a) plain-FM frozen base and (b) self-forcing frozen base
   (per the user's "test both"). SF co-adaptation may flatten the τ-cliff.
 - **Ablations:** the `t`-distribution — default is full-range `U[0,1]`; ablate a mid-band `[t_lo,t_hi]`
