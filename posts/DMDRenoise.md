@@ -226,12 +226,12 @@ Mapping onto the user's four steps, with the refinements folded in.
 **Initialize** three parameter sets:
 - $\theta_{\text{real}}$ — the frozen base (the real velocity/denoiser field), `requires_grad_(False)`.
 - $\theta_{\text{fake}}$ — an online copy of the base (the auxiliary `p_gen` denoiser), trainable; reuse the `_create_model_copy` plumbing.
-- $\varphi$ — the renoise policy, initialized so $\bar\tau \approx$ the fixed-$\tau$ sweep optimum (sane early rollouts).
+- $\varphi$ — the renoise policy, **randomly initialized** (small net). We do *not* warm-start $\bar\tau$ at the fixed-$\tau$ sweep optimum; the curriculum below (teacher-forced→free, short→long) carries the early rollouts, so a flat optimum-init buys nothing.
 - *Optional:* an EMA behavior policy $\varphi_{\text{ema}}$ (two-timescale) and a short FIFO buffer of recent on-policy windows.
 
 Then repeat steps (1)–(4):
 
-**(1) Rollout (on-policy).** Free-run the AR sequence with $\theta_{\text{real}}$ (in eval, but with **grad enabled through the warm-start input**) and the behavior policy ($\varphi$ or $\varphi_{\text{ema}}$). Use a few-step sampler per frame (1-step like the existing adaptor inference, or $\le 5$). For each window collect the **generator sample**
+**(1) Rollout (on-policy).** Free-run the AR sequence with $\theta_{\text{real}}$ (in eval, but with **grad enabled through the warm-start input**) and the behavior policy ($\varphi$ or $\varphi_{\text{ema}}$). Use a **3-step** sampler per frame (**NFE=3**, `update_sampling_timesteps=3`) — locked for this run. For each window collect the **generator sample**
 $$W = \big[\,\text{renoised context tokens}\;;\;\text{freshly generated continuation}\,\big].$$
 $\tau$ enters $W$ **both** through the reparameterized renoise $w=(1-\tau)\hat y+\tau\varepsilon$ **and** through the `t2` conditioning — keep both differentiable.
 
@@ -261,9 +261,10 @@ to ≤2 and grads truncated.
 
 **Gradient cost.** `∂W/∂φ` differentiates through the frozen sampler w.r.t. the warm-start input
 (weights frozen, activations differentiated — the existing adaptive-renoise code already does this).
-Keep the per-frame sampler to 1 step (as the current adaptor inference does,
-`update_sampling_timesteps=1`) so this is a single network JVP — cheap. Use
-gradient checkpointing / few-step only when scaling to video.
+With **NFE=3** (`update_sampling_timesteps=3`, locked) the per-frame sampler is a 3-step chain, so
+`∂W/∂φ` backprops through 3 sequential network passes per frame — ~3× the 1-step JVP cost. Cheap
+enough on the synthetic task; keep the *frame* window short and add gradient checkpointing only when
+scaling to video.
 
 ---
 
@@ -276,7 +277,7 @@ gradient checkpointing / few-step only when scaling to video.
 | **mode collapse** (mode-seeking match) | low diversity, W1 degrades, per-state spread shrinks vs data | monitor per-state spread; if collapsing, add a small coverage term (GAN-style) or entropy bonus |
 | **fake model lag** | `g` points at stale `p_gen`; policy chases ghosts | K_fake:1 two-timescale; short on-policy FIFO; warm-start θ_fake from base |
 | **three-way nonstationarity** (θ_fake, φ, φ_ema) | oscillation / divergence | two-timescale LRs, φ_ema behavior policy, short rollouts early (curriculum) |
-| **early-rollout garbage** | diverging rollouts → bad signal | init τ̄ at sweep optimum; curriculum: teacher-forced→free, short→long horizons |
+| **early-rollout garbage** | diverging rollouts → bad signal | curriculum: teacher-forced→free, short→long horizons (φ randomly initialized — no optimum warm-start) |
 | **small-`t` tail** | near-data `1/t` makes `g` noisy / gradient-scale unstable | default guards: numerical floor on `t` + grad-norm clip. If it persists, restrict to mid-band `[t_lo,t_hi]` (§3.3 deferred lever) — never a per-sample loss normalization |
 
 **Non-negotiable gate.** *Gate* = the accept / checkpoint-selection rule. Select and report **only**
@@ -347,8 +348,9 @@ Add (new):
   (frozen), θ_fake (online), φ (policy); the three-part training loop (§4); the velocity-matching `g`
   (velocity-space, unit-weighted, full-range `t`, §3.2–3.3); the on-policy buffer + two-timescale schedule.
 - Pipeline `algorithms/pipelines/dmd_renoise_flow_synthetic.py` + config
-  `configurations/algorithm/dmd_renoise_flow_synthetic.yaml` (`t` floor `epsilon` + optional `[t_lo,t_hi]`
-  band off by default, K_fake, buffer len, ema decay, unroll steps, grad-clip norm); register in `experiments/exp_synthetic.py`.
+  `configurations/algorithm/dmd_renoise_flow_synthetic.yaml` (`update_sampling_timesteps: 3` (NFE, locked),
+  `t` floor `epsilon` + optional `[t_lo,t_hi]` band off by default, K_fake, buffer len, ema decay, unroll
+  steps, grad-clip norm); register in `experiments/exp_synthetic.py`.
 - **Differentiable renoise generation**: a rollout that runs the frozen sampler with weights frozen
   but grad flowing through the warm-start input + τ (params `requires_grad_(False)`, no `no_grad`
   around the warm-start), modeled on the prior adaptive-renoise sampler.
