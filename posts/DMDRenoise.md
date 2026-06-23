@@ -73,10 +73,10 @@ the frozen denoiser is the projection back to the data manifold (an SDEdit-style
 projection). The policy learns the **per-token minimum noise that washes out accumulated bias while
 preserving the temporal information needed for coherence** — exactly the stated goal.
 
-**Policy.** `τ = τ_φ(features)`, a small network (reuse `models/renoise_policy.py` from
-`feat/dmd-renoise-policy`, ~20k params). Per-token inputs: lead-time index, time-in-episode, a
-summary of the warm-start `ŷ` (and optionally the base's predictive spread). Stage 0 uses a single
-global learned scalar; Stage 1 the per-token policy.
+**Policy.** `τ = τ_φ(·)`, a small network (reuse `models/renoise_policy.py` from
+`feat/dmd-renoise-policy`, ~20k params). **Inputs: the raw previous context token(s) and the current
+observation — no hand-engineered features** (no lead-time/time-in-episode/ŷ-summary). The net reads
+the same state the base conditions on and emits τ.
 
 ---
 

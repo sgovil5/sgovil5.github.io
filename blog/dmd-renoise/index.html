@@ -115,10 +115,10 @@ warm-start <code>ŷ</code> is a temporal <em>prior</em>, <code>τ</code> sets ho
 the frozen denoiser is the projection back to the data manifold (an SDEdit-style manifold
 projection). The policy learns the <strong>per-token minimum noise that washes out accumulated bias while
 preserving the temporal information needed for coherence</strong> — exactly the stated goal.</p>
-<p><strong>Policy.</strong> <code>τ = τ_φ(features)</code>, a small network (reuse <code>models/renoise_policy.py</code> from
-<code>feat/dmd-renoise-policy</code>, ~20k params). Per-token inputs: lead-time index, time-in-episode, a
-summary of the warm-start <code>ŷ</code> (and optionally the base&#39;s predictive spread). Stage 0 uses a single
-global learned scalar; Stage 1 the per-token policy.</p>
+<p><strong>Policy.</strong> <code>τ = τ_φ(·)</code>, a small network (reuse <code>models/renoise_policy.py</code> from
+<code>feat/dmd-renoise-policy</code>, ~20k params). <strong>Inputs: the raw previous context token(s) and the current
+observation — no hand-engineered features</strong> (no lead-time/time-in-episode/ŷ-summary). The net reads
+the same state the base conditions on and emits τ.</p>
 <hr>
 <h2>2. Why this is the right objective (and prior ones weren&#39;t)</h2>
 <p>Documented results from the prior renoise-policy work (<code>RESULTS_adaptive_renoise_sf.md</code>,
