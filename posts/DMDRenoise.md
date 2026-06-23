@@ -379,6 +379,8 @@ The drift-difference update of §3.2 is the **velocity-field form of distributio
 reverse-KL gradient via the score (using $v_{\text{gen}}-v_{\text{data}}=-\tfrac{t}{1-t}(s_{\text{gen}}-s_{\text{data}})$,
 exact for any data — §3.1). We do **not** rely on that derivation — the velocity-field characterization
 (§3.0) justifies the method directly. The equivalence is noted only so the accumulated stabilization
-know-how (two-timescale fake-model updates, per-sample gradient normalization, optional GAN coverage
-term) transfers for free. The branch keeps the historical `dmd` tag in its name; the method here is
-velocity-field matching.
+know-how (two-timescale fake-model updates, gradient-scale control, optional GAN coverage term)
+transfers for free — with one deliberate departure: we keep the **unit-weighted velocity** objective and
+skip DMD's per-sample gradient normalization, using global grad-norm clipping only if needed (§3.3), so
+no heuristic $t$-weight slips back in. The branch keeps the historical `dmd` tag in its name; the method
+here is velocity-field matching.
