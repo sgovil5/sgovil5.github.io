@@ -142,60 +142,63 @@ Both sides are native model outputs. *(Optional score connection, never used bel
 
 ### 3.2 The objective and the policy gradient
 
-**Objective (denoiser form — what we implement).** Minimize the denoiser-space mismatch on the rollout support,
+**Objective (velocity form — what we implement).** Minimize the velocity-field mismatch on the rollout support,
 
-$$\mathcal{D}(\varphi) = \mathbb{E}_{t\sim p(t)}\,\mathbb{E}_{x\sim p_t^{\text{gen}}}\Big[\, w(t)\,\big\lVert \hat x_{0,\text{real}}(x,t) - \hat x_{0,\text{fake}}(x,t) \big\rVert^2 \,\Big] \;\ge\; 0,$$
+$$\mathcal{D}(\varphi) = \mathbb{E}_{t\sim\mathcal{U}[t_{\text{lo}},t_{\text{hi}}]}\,\mathbb{E}_{x\sim p_t^{\text{gen}}}\Big[\, \big\lVert v_{\text{real}}(x,t) - v_{\text{fake}}(x,t) \big\rVert^2 \,\Big] \;\ge\; 0,$$
 
-zero exactly when the denoisers coincide on the rollout support $\Rightarrow$ the velocity fields coincide
-($\hat x_0$ and $v$ are interchangeable, §3.1) $\Rightarrow p_{\text{gen}}=p_{\text{data}}$ (§3.0). Here $\hat x_{0,\text{real}}$ is
-the **frozen base** (the real denoiser, for free) and $\hat x_{0,\text{fake}}$ is tracked online by a second flow
-net fit to the current rollout (§4).
+with **unit weighting** — this is exactly the object the §3.0 characterization is about, and it is zero
+exactly when the velocity fields coincide on the rollout support $\Rightarrow p_{\text{gen}}=p_{\text{data}}$.
+Here $v_{\text{real}}$ comes from the **frozen base** (the real velocity field, for free) and $v_{\text{fake}}$ from a
+second flow net tracked online on the current rollout (§4). Each velocity is read off the raw `pred_x0`
+output via $v=(x-\hat x_0)/t$ (§3.1) — the $1/t$ is the *exact* identity, not a weighting, and the
+mid-band keeps $t$ away from $0$ so it is well-conditioned.
 
-*Equivalent velocity-field form (the statement §3.0 characterizes):* $\mathcal{D}(\varphi)=\mathbb{E}[\lambda(t)\lVert v_{\text{real}}-v_{\text{fake}}\rVert^2]$
-with $\lambda(t)=t^2\,w(t)$, since $\hat x_{0,\text{real}}-\hat x_{0,\text{fake}}=t\,(v_{\text{fake}}-v_{\text{real}})$. We optimize the
-**denoiser form** because it carries no $1/t$ and is the raw `pred_x0` output — velocity is the conceptual
-handle, $\hat x_0$ is the computed quantity.
+*Why velocity, not $\hat x_0$:* the two losses differ only by a $t$-profile — $\lVert\hat x_{0,\text{real}}-\hat x_{0,\text{fake}}\rVert^2 = t^2\lVert v_{\text{real}}-v_{\text{fake}}\rVert^2$, so "denoiser-space, weight 1" *is* "velocity-space, weight $t^2$." Choosing the
+representation **is** choosing the weighting; we pick velocity because it is the canonical variable the
+characterization speaks in, and weight 1 there needs no heuristic $w(t)$. The only price is a relative
+$1/t$ emphasis toward small $t$ — which is *where the informative discrepancies live* (§3.3) — bounded by $t_{\text{lo}}$.
 
-**Policy gradient (denoiser-difference).** Hold both denoisers fixed (stop-grad: $\hat x_{0,\text{real}}$ frozen,
-$\hat x_{0,\text{fake}}$ separately fit) and move generated samples to shrink the mismatch. Inject on each sample
+**Policy gradient (velocity-difference).** Hold both velocity fields fixed (stop-grad: $v_{\text{real}}$ frozen,
+$v_{\text{fake}}$ separately fit) and move generated samples to shrink the mismatch. Inject on each sample
 $x_t$ the surrogate gradient
 
-$$\boxed{\; g(x_t) \;=\; \tilde w(t)\,\big( \hat x_{0,\text{fake}}(x_t,t) - \hat x_{0,\text{real}}(x_t,t) \big) \;}$$
+$$\boxed{\; g(x_t) \;=\; v_{\text{real}}(x_t,t) - v_{\text{fake}}(x_t,t) \;}$$
 
-(the gradient weight $\tilde w(t)$ realizes the objective weight $w(t)$; its concrete form is fixed in §3.3)
 and backprop $\partial x_t/\partial\varphi$ (through the renoise reparameterization **and** the $t2$
 conditioning) to $\varphi$; take a gradient-**descent** step. **Net effect:** each sample moves along
-$\hat x_{0,\text{real}}-\hat x_{0,\text{fake}}$, i.e. toward the real denoiser's reconstruction $\hat x_{0,\text{real}}$ — cancelling
+$v_{\text{fake}}-v_{\text{real}}$, equivalently toward the real reconstruction $\hat x_{0,\text{real}}$ — cancelling
 the *excess transport drift* that distinguishes the rollout from data. **Fixed point** (expressive policy,
-converged fake net): $\hat x_{0,\text{fake}}=\hat x_{0,\text{real}}$ on the rollout support, i.e. matched.
+converged fake net): $v_{\text{fake}}=v_{\text{real}}$ on the rollout support, i.e. matched.
 
-**Sign / equivalence note (prevents a real bug).** We compute the denoiser difference, ordered
-$(\hat x_{0,\text{fake}}-\hat x_{0,\text{real}})$. Its velocity-field equivalent is $g=\tilde w(t)\,t\,(v_{\text{real}}-v_{\text{fake}})$ —
-*opposite* ordering, because $v=(x-\hat x_0)/t$ flips the sign, and the factor $t$ is the denoiser↔velocity
-conversion (absorbed into $\tilde w$). Both descend to move the sample toward $\hat x_{0,\text{real}}$. We compute
-the denoiser difference because it has no $1/t$ blow-up and is the raw `pred_x0` output (no derivation).
-**Stop-grad both nets' weights** — we use their *values*, not their $\varphi$-gradients.
+**Sign note (prevents a real bug).** The injected difference is ordered $(v_{\text{real}}-v_{\text{fake}})$ —
+**real minus fake**, the *opposite* ordering from the denoiser difference $(\hat x_{0,\text{fake}}-\hat x_{0,\text{real}})$,
+because $v=(x-\hat x_0)/t$ flips the sign: $\hat x_{0,\text{fake}}-\hat x_{0,\text{real}}=t\,(v_{\text{real}}-v_{\text{fake}})$. Both descend the sample
+toward $\hat x_{0,\text{real}}$; the only safe check is the *effect* (sample moves toward the real reconstruction),
+not the literal operand order. **Stop-grad both nets' weights** — we use their *values*, not their $\varphi$-gradients.
 
-**On exactness.** This drops the denoiser Jacobian $\partial \hat x_0/\partial x$ that the exact $\nabla_\varphi\mathcal{D}$
+**On exactness.** This drops the velocity Jacobian $\partial v/\partial x$ that the exact $\nabla_\varphi\mathcal{D}$
 would carry — a deliberate, standard simplification (lower variance and cost; same fixed point
-$\hat x_{0,\text{fake}}=\hat x_{0,\text{real}}$).
+$v_{\text{fake}}=v_{\text{real}}$).
 
-### 3.3 The weighting $\tilde w(t)$ — do not skip this
+### 3.3 The only knob: the noise-level band $[t_{\text{lo}},t_{\text{hi}}]$
 
-A unit field mismatch at different $t$ does **not** reflect equal distributional discrepancy. Near
-$t\to1$ both $p_t^{\text{gen}},p_t^{\text{data}}$ are heavily smoothed toward the same $\mathcal{N}(0,I)$, so a
-difference there says little about $p_{\text{data}}$'s structure; the informative discrepancies (manifold
-bias, lost coherence) live nearer $t\to0$. A uniform-in-$t$ loss is dominated by the uninformative
-near-noise band, and the raw velocity difference further amplifies it (it carries a $1/t$ relative to
-the denoiser difference). Mitigations — use all three:
+There is no heuristic weighting function. The velocity objective fixes the $t$-profile canonically
+(weight 1, §3.2); the one thing we set is the **band of $t$ we sample over**, and that is a validity
+constraint, not a tuned weight. Two ends to clip:
 
-1. **Denoiser-space signal + per-sample normalization.** Form $g$ from $\hat x_{0,\text{fake}}-\hat x_{0,\text{real}}$
-   (data-space, no $1/t$ blow-up) and normalize per sample by a running scale, e.g.
-   $\tilde w(t)=c\,/\,\overline{\lVert \hat x_{0,\text{real}}(x_t)-x_t\rVert}$ — scale-invariant, the trick that keeps
-   these updates stable.
-2. **Mid-band $t$.** Sample $t\sim\mathcal{U}[t_{\text{lo}},t_{\text{hi}}]$ (e.g. $[0.02,0.98]$, tune) to avoid the
-   $t\to0$ amplification and the $t\to1$ uninformative region.
-3. **Do not** ship the unweighted raw velocity difference; it optimizes mostly near-noise agreement.
+1. **Upper cut $t_{\text{hi}}$ (drop near-noise).** Near $t\to1$ both $p_t^{\text{gen}},p_t^{\text{data}}$ are heavily
+   smoothed toward the same $\mathcal{N}(0,I)$, so a velocity difference there says little about $p_{\text{data}}$'s
+   structure — uninformative. The informative discrepancies (manifold bias, lost coherence) live nearer
+   $t\to0$, which the velocity loss already emphasizes (its $1/t$ relative to the denoiser difference puts
+   weight on **small $t$ / near data**, exactly the right direction).
+2. **Lower cut $t_{\text{lo}}$ (bound the small-$t$ amplification).** That same $1/t$ means $g=v_{\text{real}}-v_{\text{fake}}$
+   grows as $t\to0$ and can get noisy if either net is shaky near the data manifold; $t_{\text{lo}}$ caps the
+   factor at $1/t_{\text{lo}}$ (e.g. $t_{\text{lo}}=0.1\Rightarrow{\le}10\times$). It also sits above
+   `numerical_stabilizer` ($\approx10^{-4}$, where `flow.py` clamps $t$), so we are never in the truncated regime.
+
+So sample $t\sim\mathcal{U}[t_{\text{lo}},t_{\text{hi}}]$ (start $[0.1,0.9]$, tune as an ablation). If the gradient
+*scale* is ever unstable, the principled fix is **global grad-norm clipping** (a standard optimizer device)
+— **not** a per-sample normalization baked into the loss, which would silently reintroduce a heuristic $t$-weight.
 
 ### 3.4 The frozen base is the real velocity field — and where it's trustworthy
 
@@ -234,10 +237,10 @@ $\tau$ enters $W$ **both** through the reparameterized renoise $w=(1-\tau)\hat y
 
 **(3) Update the policy $\varphi$.** For a (truncated-BPTT) set of windows $W$ from step (1):
 - sample a shared mid-band level $t\sim\mathcal{U}[t_{\text{lo}},t_{\text{hi}}]$ and noise the window, $W_t = q_{\text{sample}}(W,t)$;
-- query both denoisers with weights **stop-gradded** — the real $\hat x_{0,\text{real}}$ and the fake $\hat x_{0,\text{fake}}$, each from `pred_x0` at $(W_t,t)$;
-- form the velocity-field-mismatch gradient via the stabler denoiser form (§3.2–3.3),
-$$g \;=\; \tilde w(t)\,\big(\hat x_{0,\text{fake}} - \hat x_{0,\text{real}}\big) \;=\; \tilde w(t)\,t\,\big(v_{\text{real}} - v_{\text{fake}}\big),$$
-whose descent moves $W$ toward $\hat x_{0,\text{real}}$;
+- query both nets with weights **stop-gradded** at $(W_t,t)$ — read $\hat x_{0,\text{real}},\hat x_{0,\text{fake}}$ from `pred_x0` and convert each to velocity $v=(W_t-\hat x_0)/t$ (the $1/t$ is the exact identity, §3.1; $t$ is mid-band so well-conditioned);
+- form the velocity-field-mismatch gradient (§3.2),
+$$g \;=\; v_{\text{real}}(W_t,t) - v_{\text{fake}}(W_t,t),$$
+whose descent moves $W$ toward $\hat x_{0,\text{real}}$ (real **minus** fake — see the §3.2 sign note);
 - backprop $g$ through $W_t \to W \to \text{renoise}(\tau_\varphi) \to \varphi$ and take an Adam step (reduce the velocity-field mismatch).
 
 > **Invariant.** No reconstruction/FM term ever backprops into $\varphi$ (the *Trap*) — only $g$ trains $\varphi$.
@@ -272,7 +275,7 @@ gradient checkpointing / few-step only when scaling to video.
 | **fake model lag** | `g` points at stale `p_gen`; policy chases ghosts | K_fake:1 two-timescale; short on-policy FIFO; warm-start θ_fake from base |
 | **three-way nonstationarity** (θ_fake, φ, φ_ema) | oscillation / divergence | two-timescale LRs, φ_ema behavior policy, short rollouts early (curriculum) |
 | **early-rollout garbage** | diverging rollouts → bad signal | init τ̄ at sweep optimum; curriculum: teacher-forced→free, short→long horizons |
-| **wrong weighting** | optimizes only near-noise agreement | §3.3 — x̂₀-space + per-sample norm + mid-band `t`; never raw velocity diff |
+| **bad `t`-band** | small-`t` blow-up (noisy `g`) or near-noise dominates | §3.3 — sample `t` in mid-band `[t_lo,t_hi]`; grad-norm clip if scale is unstable (never a per-sample loss normalization) |
 
 **Non-negotiable gate.** *Gate* = the accept / checkpoint-selection rule. Select and report **only**
 on **deployed free-running (closed-loop)** seeded RMSE + exact-OT W1 (p=1, `synthetic_task.py`). The
@@ -317,9 +320,9 @@ flow-mog/adaptive-renoise checkout and need porting — see the project memory).
   beat the best fixed/banded τ on deployed W1 (the bar prior single-window policies could not clear).*
 - **Stage 2 — both bases.** Repeat for (a) plain-FM frozen base and (b) self-forcing frozen base
   (per the user's "test both"). SF co-adaptation may flatten the τ-cliff.
-- **Ablations:** weighting (denoiser-space + per-sample norm vs raw-velocity — expect raw to fail);
-  single-window vs 2-step unroll; K_fake ratio; on-policy buffer length; plain match vs +coverage(GAN)
-  term; policy inputs (with/without base predictive spread).
+- **Ablations:** the `t`-band `[t_lo,t_hi]` (too-low `t_lo` → small-`t` blow-up; too-high `t_hi` →
+  near-noise dominates); single-window vs 2-step unroll; K_fake ratio; on-policy buffer length;
+  plain match vs +coverage(GAN) term; policy inputs (with/without base predictive spread).
 
 ---
 
@@ -339,7 +342,7 @@ Reuse (exists today):
 Add (new):
 - `algorithms/base_model/dmd_renoise_flow_base.py` (filename keeps the branch tag): holds θ_real
   (frozen), θ_fake (online), φ (policy); the three-part training loop (§4); the velocity-matching `g`
-  (denoiser-space, weighted, §3.3); the on-policy buffer + two-timescale schedule.
+  (velocity-space, unit-weighted, mid-band `t`, §3.2–3.3); the on-policy buffer + two-timescale schedule.
 - Pipeline `algorithms/pipelines/dmd_renoise_flow_synthetic.py` + config
   `configurations/algorithm/dmd_renoise_flow_synthetic.yaml` (mid-band `[t_lo,t_hi]`, K_fake,
   buffer len, ema decay, unroll steps); register in `experiments/exp_synthetic.py`.
