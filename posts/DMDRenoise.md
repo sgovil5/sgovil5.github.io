@@ -239,7 +239,7 @@ $\tau$ enters $W$ **both** through the reparameterized renoise $w=(1-\tau)\hat y
 
 **(3) Update the policy $\varphi$.** For a (truncated-BPTT) set of windows $W$ from step (1):
 - sample a shared level over the full range $t\sim\mathcal{U}[\epsilon,1{-}\epsilon]$ ($\epsilon\approx$ `numerical_stabilizer`; no mid-band by default, §3.3) and noise the window, $W_t = q_{\text{sample}}(W,t)$;
-- query both nets with weights **stop-gradded** at $(W_t,t)$ — read $\hat x_{0,\text{real}},\hat x_{0,\text{fake}}$ from `pred_x0` and convert each to velocity $v=(W_t-\hat x_0)/t$ (the $1/t$ is the exact identity, §3.1; $t$ is mid-band so well-conditioned);
+- query both nets with weights **stop-gradded** at $(W_t,t)$ — read $\hat x_{0,\text{real}},\hat x_{0,\text{fake}}$ from `pred_x0` and convert each to velocity $v=(W_t-\hat x_0)/t$ (the $1/t$ is the exact identity, §3.1; $t\ge\epsilon$ keeps the division well-conditioned);
 - form the velocity-field-mismatch gradient (§3.2),
 $$g \;=\; v_{\text{real}}(W_t,t) - v_{\text{fake}}(W_t,t),$$
 whose descent moves $W$ toward $\hat x_{0,\text{real}}$ (real **minus** fake — see the §3.2 sign note);
@@ -277,7 +277,7 @@ gradient checkpointing / few-step only when scaling to video.
 | **fake model lag** | `g` points at stale `p_gen`; policy chases ghosts | K_fake:1 two-timescale; short on-policy FIFO; warm-start θ_fake from base |
 | **three-way nonstationarity** (θ_fake, φ, φ_ema) | oscillation / divergence | two-timescale LRs, φ_ema behavior policy, short rollouts early (curriculum) |
 | **early-rollout garbage** | diverging rollouts → bad signal | init τ̄ at sweep optimum; curriculum: teacher-forced→free, short→long horizons |
-| **bad `t`-band** | small-`t` blow-up (noisy `g`) or near-noise dominates | §3.3 — sample `t` in mid-band `[t_lo,t_hi]`; grad-norm clip if scale is unstable (never a per-sample loss normalization) |
+| **small-`t` tail** | near-data `1/t` makes `g` noisy / gradient-scale unstable | default guards: numerical floor on `t` + grad-norm clip. If it persists, restrict to mid-band `[t_lo,t_hi]` (§3.3 deferred lever) — never a per-sample loss normalization |
 
 **Non-negotiable gate.** *Gate* = the accept / checkpoint-selection rule. Select and report **only**
 on **deployed free-running (closed-loop)** seeded RMSE + exact-OT W1 (p=1, `synthetic_task.py`). The
@@ -322,7 +322,8 @@ flow-mog/adaptive-renoise checkout and need porting — see the project memory).
   beat the best fixed/banded τ on deployed W1 (the bar prior single-window policies could not clear).*
 - **Stage 2 — both bases.** Repeat for (a) plain-FM frozen base and (b) self-forcing frozen base
   (per the user's "test both"). SF co-adaptation may flatten the τ-cliff.
-- **Ablations:** the `t`-band `[t_lo,t_hi]` (too-low `t_lo` → small-`t` blow-up; too-high `t_hi` →
+- **Ablations:** the `t`-distribution — default is full-range `U[0,1]`; ablate a mid-band `[t_lo,t_hi]`
+  **only if** the small-`t` tail shows up (too-low `t_lo` → small-`t` blow-up; too-high `t_hi` →
   near-noise dominates); single-window vs 2-step unroll; K_fake ratio; on-policy buffer length;
   plain match vs +coverage(GAN) term; policy inputs (with/without base predictive spread).
 
@@ -344,10 +345,10 @@ Reuse (exists today):
 Add (new):
 - `algorithms/base_model/dmd_renoise_flow_base.py` (filename keeps the branch tag): holds θ_real
   (frozen), θ_fake (online), φ (policy); the three-part training loop (§4); the velocity-matching `g`
-  (velocity-space, unit-weighted, mid-band `t`, §3.2–3.3); the on-policy buffer + two-timescale schedule.
+  (velocity-space, unit-weighted, full-range `t`, §3.2–3.3); the on-policy buffer + two-timescale schedule.
 - Pipeline `algorithms/pipelines/dmd_renoise_flow_synthetic.py` + config
-  `configurations/algorithm/dmd_renoise_flow_synthetic.yaml` (mid-band `[t_lo,t_hi]`, K_fake,
-  buffer len, ema decay, unroll steps); register in `experiments/exp_synthetic.py`.
+  `configurations/algorithm/dmd_renoise_flow_synthetic.yaml` (`t` floor `epsilon` + optional `[t_lo,t_hi]`
+  band off by default, K_fake, buffer len, ema decay, unroll steps, grad-clip norm); register in `experiments/exp_synthetic.py`.
 - **Differentiable renoise generation**: a rollout that runs the frozen sampler with weights frozen
   but grad flowing through the warm-start input + τ (params `requires_grad_(False)`, no `no_grad`
   around the warm-start), modeled on the prior adaptive-renoise sampler.
@@ -366,8 +367,9 @@ AdaLN transformer was already extended to support `k_embed_2`/`t2`).
 - **Mode-seeking.** The velocity-matching fixed point is mode-seeking; if that hurts the
   coherence/diversity goal, a small coverage / GAN term may be needed — but that reintroduces a second
   moving part.
-- **Teacher trust off-manifold** during early training — does the mid-band `t` + renoise keep
-  queries in-region well enough, or do we need to clip/anneal `t_lo` upward early?
+- **Teacher trust off-manifold** during early training — with full-range `t`, do the small-`t`
+  (near-data) queries on still-garbage early rollouts stay in-region, or is this the failure mode that
+  forces an annealed `t_lo` floor (the §3.3 deferred lever) early in training?
 - **Co-adaptation (unfreezing the base) as a Stage-3 extension** — the genuinely new lever
   (model learns to fix exactly the errors that survive renoise at the policy's τ); measurably
   reshaped the τ-landscape before but did not by itself rescue the (then single-window) objective.
