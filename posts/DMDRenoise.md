@@ -223,6 +223,78 @@ velocity/denoiser field (no separate teacher needed). Two caveats handled by des
   base's `random_all` per-token mode; `second_k_emb`/`t2` already supports it.) The policy's per-token
   $\tau$ lives only in the *generation* path, decoupled from the eval $t$.
 
+### 3.5 Clean derivation: from "match distributions" to the objective
+
+This subsection derives, from the single requirement *"make the generated distribution equal the data
+distribution,"* the exact functional we minimize and the exact gradient we inject — with no heuristic step
+in between. Everything above (§3.0–3.4) is the toolbox; here it is assembled in order.
+
+**Goal.** Choose the renoise policy $\varphi$ so that the distribution of on-policy windows $p^{\varphi}_{\text{gen}}$
+equals the data window distribution $p_{\text{data}}$.
+
+**Notation.** For *any* window distribution $q_0$, the flow-matching path defines marginals
+$$q_t(x) \;=\; \int q_0(d)\,\mathcal N\!\big(x;\,(1-t)d,\,t^2 I\big)\,dd, \qquad t\in[0,1],$$
+where the noising kernel is Gaussian *by construction* while $q_0$ is arbitrary, and $q_1=\mathcal N(0,I)$ for
+every $q_0$. Its marginal velocity field is the conditional expectation (§3.1)
+$$v^{q}_t(x) \;=\; \mathbb E_{q}\!\left[\varepsilon - d \,\middle|\, x_t = x\right] \;=\; \frac{x - \hat x^{\,q}_0(x,t)}{t}, \qquad \hat x^{\,q}_0(x,t)=\mathbb E_q[d\mid x_t=x].$$
+
+**Step 1 — distribution equality $\Leftrightarrow$ velocity equality.**
+By the continuity equation, $v^{q}$ is the *unique* marginal drift whose ODE $\dot x_t = v^{q}_t(x_t)$ transports
+the common source $q_1=\mathcal N(0,I)$ to $q_0$. Hence, for $p_{\text{gen}}$ and $p_{\text{data}}$ sharing that source
+and that kernel,
+$$p_{\text{gen}} = p_{\text{data}} \;\;\Longleftrightarrow\;\; v^{\text{gen}}_t(x)=v^{\text{data}}_t(x)\ \ \ \forall\,t\in(0,1],\ x\in\operatorname{supp}(p^{\text{gen}}_t).$$
+($\Rightarrow$) equal $q_0$ $\Rightarrow$ equal marginals $q_t$ $\Rightarrow$ equal posteriors $\Rightarrow$ equal fields.
+($\Leftarrow$) equal fields + equal terminal $q_1$ $\Rightarrow$ equal transport $\Rightarrow$ equal $q_0$. The marginals
+$p_t$ have full support for every $t>0$ (a Gaussian convolution), so "on the support" is "everywhere." *No
+Gaussian-data and no KL assumption enters* — the only Gaussianity is the kernel that **defines** $v^{q}$.
+
+**Step 2 — a population objective that is zero iff matched.**
+Velocity equality everywhere is exactly the statement that this non-negative functional vanishes:
+$$\boxed{\;\mathcal D(\varphi) \;=\; \int_0^1 \mathbb E_{x\sim p^{\text{gen}}_t}\big\lVert v^{\text{data}}_t(x) - v^{\text{gen}}_t(x)\big\rVert^2\,dt \;\ge\;0,\qquad \mathcal D(\varphi)=0 \iff p_{\text{gen}}=p_{\text{data}}.\;}$$
+The expectation is taken under $x\sim p^{\text{gen}}_t$ because the rollout is all we can sample; vanishing on the
+rollout support is precisely what the Step-1 characterization requires. This **is** the §3.2 objective, with the
+two fields named: $v^{\text{data}}=v_{\text{real}}$, $v^{\text{gen}}=v_{\text{fake}}$.
+
+**Step 3 — both fields are obtainable.**
+- $v^{\text{data}}=v_{\text{real}}$ is *free*. The frozen base was trained by FM regression on data, whose pointwise
+  minimizer is the conditional expectation $\mathbb E_{\text{data}}[\varepsilon-d\mid x_t]=v^{\text{data}}$. So the base
+  literally **is** the real field (§3.4).
+- $v^{\text{gen}}=v_{\text{fake}}$ has no closed form, so we *estimate it online*. Fit a second FM net
+  $\theta_{\text{fake}}$ to the current rollout windows with the **same** regression,
+  $$\min_{\theta}\ \mathbb E_{t,\;d\sim p_{\text{gen}},\;\varepsilon}\ \big\lVert f_\theta(x_t,t)-(\varepsilon-d)\big\rVert^2,$$
+  whose pointwise minimizer is $f_{\theta^\star}(x,t)=\mathbb E_{p_{\text{gen}}}[\varepsilon-d\mid x_t=x]=v^{\text{gen}}_t(x)$.
+  That is why the "fake" net tracks the *rollout's* field — and why it must be kept fresh as $\varphi$ moves
+  (two-timescale, $K_{\text{fake}}$ steps per policy step, §4).
+
+**Step 4 — the gradient on $\varphi$, and why it is just $v_{\text{real}}-v_{\text{fake}}$.**
+We reduce $\mathcal D$ by pushing each generated sample. The descent injects, at each noised sample $x_t$, the
+per-sample surrogate gradient
+$$g(x_t) \;=\; v_{\text{real}}(x_t,t)-v_{\text{fake}}(x_t,t),\qquad \varphi \leftarrow \varphi - \eta\, g^{\top}\frac{\partial x_t}{\partial\varphi},$$
+so each sample moves along $-g = v_{\text{fake}}-v_{\text{real}} = \big(\hat x_{0,\text{real}}-\hat x_{0,\text{fake}}\big)/t$ — *from the
+fake reconstruction toward the real one* (§3.1), cancelling the excess drift that separates rollout from data.
+Two equivalent readings certify this is the right $g$:
+
+1. **Velocity-matching reading.** $g$ is $\tfrac12\,\nabla_{x_t}\lVert v_{\text{real}}-v_{\text{fake}}\rVert^2$ with the
+   field Jacobians $\partial v/\partial x_t$ held fixed — i.e. the integrand of $\mathcal D$ descended in sample space.
+   Dropping the Jacobian is the deliberate simplification of §3.2 ("On exactness"): cheaper, lower-variance,
+   **same fixed point** $v_{\text{fake}}=v_{\text{real}}$.
+2. **Reverse-KL reading.** Substituting $s_{\text{real}}-s_{\text{fake}}=-\tfrac{1-t}{t}\,(v_{\text{real}}-v_{\text{fake}})$
+   (§3.1), the same $g$ equals the per-sample gradient of $\int_0^1 w(t)\,\mathrm{KL}\!\big(p^{\text{gen}}_t\,\Vert\,p^{\text{data}}_t\big)\,dt$
+   under the weight $w(t)=t/(1-t)$. In words: **velocity-space with unit weight = reverse-KL with weight
+   $t/(1-t)$.** This is exactly the DMD / Diff-Instruct gradient — obtained here *without* ever invoking a score
+   or a KL (§"Relation to existing methods").
+
+Both readings share the identical fixed point — $v_{\text{fake}}=v_{\text{real}}$ on the rollout support, hence
+$p_{\text{gen}}=p_{\text{data}}$ by Step 1 — so the *implemented update* is consistent with the *certificate*
+$\mathcal D=0$. The two-network structure ($\theta_{\text{real}}$ frozen, $\theta_{\text{fake}}$ online, $\varphi$ the
+policy) is forced by Steps 3–4, not chosen by analogy.
+
+**Step 5 — the invariant the derivation forces.** Only $g$ may reach $\varphi$. The fake-model regression (Step 3)
+trains $\theta_{\text{fake}}$ on **stop-grad** rollouts; the matching gradient (Step 4) trains $\varphi$ alone. Letting
+any reconstruction/FM term backprop into $\varphi$ would optimize "make the source→target bridge predictable"
+($\tau\to0$, the *Trap*) instead of "match distributions," breaking the derivation at Step 2. This is the
+architectural invariant of §4/§5, here re-derived rather than asserted.
+
 ---
 
 ## 4. The algorithm
