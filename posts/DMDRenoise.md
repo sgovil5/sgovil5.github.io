@@ -353,15 +353,20 @@ whose descent moves $W$ toward $\hat x_{0,\text{real}}$ (real **minus** fake —
 
 **(4) Repeat,** periodically evaluating the deployment gate (free-running seeded RMSE + exact-OT W1) and checkpointing the best-by-gate policy.
 
-**Granularity (the key choice).** Primary objective = **single-window joint** matching, on-policy.
-The on-policy context distribution already encodes the cumulative consequence of the policy's past
-τ-choices, so a fixed point where every window's joint matches data *is* a trajectory whose
-finite-dimensional marginals match data (telescoping under the Markov/sliding-window structure) —
-this is what makes single-window-but-on-policy genuinely different from the prior single-window
-*conditional* MSE. **Optional robustness extension:** a short **2-step unrolled** matching loss
-(truncated BPTT) to penalize compounding inside the backprop window directly. Introduce it *only* if
-single-window underperforms on the gate — prior work found 4-step BPTT destabilized, so keep unrolls
-to ≤2 and grads truncated.
+**Granularity (the key choice).** Primary objective = **single-window joint** matching, on-policy —
+where "window" is now the **joint 4-frame continuation** (`[1 renoised context ; 4 generated]`),
+matched as one distribution against the mode-posterior-weighted data target. The on-policy context
+distribution already encodes the cumulative consequence of the policy's past τ-choices, so a fixed
+point where every window's joint matches data *is* a trajectory whose finite-dimensional marginals
+match data (telescoping under the Markov/sliding-window structure) — this is what makes
+single-window-but-on-policy genuinely different from the prior single-window *conditional* MSE.
+**Cross-window backprop is OFF by default.** The 5 sliding windows are matched independently (each
+on-policy, but no BPTT *across* the warm-start boundary between windows); the unroll depth `K_bptt`
+is a **config lever** (default `1` = within-window only). A short multi-window unroll (`K_bptt=2`,
+truncated BPTT) is the reserved extension to penalize cross-window compounding inside the gradient —
+introduce it *only* if the single-window 4-frame match underperforms on the gate, and keep it ≤2
+(prior work found 4-step BPTT destabilized). The 4-frame joint window already buys *intra*-window
+coherence; cross-window compounding is the part deferred behind `K_bptt`.
 
 **Gradient cost.** `∂W/∂φ` differentiates through the frozen sampler w.r.t. the warm-start input
 (weights frozen, activations differentiated — the existing adaptive-renoise code already does this).
@@ -377,7 +382,7 @@ scaling to video.
 | risk | symptom | guard |
 |---|---|---|
 | **The Trap** (τ→0) | τ collapses to ~0, RMSE great, W1 terrible | architectural: only `g` (dist-match) trains φ; assert no FM loss in φ's graph |
-| **τ→1 everywhere** | policy discards warm-start | *correct* on benign/strong-conditioning tasks — it's a sanity check, not a bug (see §6). Flag via τ-histogram; compare W1 to fixed-τ=1 baseline |
+| **τ→1 everywhere** | policy discards warm-start | *correct* only on the unbiased walk / strong-conditioning bases (a sanity check, not a bug). On the **drift task it means missing the adaptive headroom** (early frames should keep τ high, late frames low) — diagnose via the τ-vs-time-in-episode curve, not just a histogram; compare W1 to the best *fixed* τ, not only τ=1 |
 | **mode collapse** (mode-seeking match) | low diversity, W1 degrades, per-state spread shrinks vs data | monitor per-state spread; if collapsing, add a small coverage term (GAN-style) or entropy bonus |
 | **fake model lag** | `g` points at stale `p_gen`; policy chases ghosts | K_fake:1 two-timescale; short on-policy FIFO; warm-start θ_fake from base |
 | **three-way nonstationarity** (θ_fake, φ, φ_ema) | oscillation / divergence | two-timescale LRs, φ_ema behavior policy, short rollouts early (curriculum) |
@@ -403,38 +408,45 @@ Two preconditions, both learned the hard way in prior runs:
    and the model relies on it (weak/limited conditioning, long horizons, or SF co-adaptation that
    makes the model exploit the warm-start).
 
-2. **Uncertainty must be heterogeneous** for an *adaptive* (vs constant) τ to win. The 1D random
-   walk is homogeneous → its fixed-τ optimum is a trivial low constant, no adaptive headroom. The
-   **MoG task** (persistent latent mode, per-mode anisotropic noise) creates the needed structure:
-   early-episode mode-uncertain ⇒ high optimal τ (re-infer), late ⇒ low τ (refine); a genuine
-   τ-cliff (low-τ compounds into wrong-mode lock-in, ~190× SSE swing). That is where a learned
-   per-token policy can beat any constant.
+2. **Uncertainty must be heterogeneous** for an *adaptive* (vs constant) τ to win. The *unbiased*
+   (`drift_m=0`) walk is homogeneous → its fixed-τ optimum is a trivial low constant, no adaptive
+   headroom. The **hidden-mode drift walk** (`drift_m>0`, §1) supplies the missing structure *in this
+   repo*: a persistent latent mode `s` that is uncertain early (⇒ high optimal τ — re-infer rather
+   than trust a biased warm-start) and revealed late by the up/down frequency (⇒ low optimal τ —
+   refine). That early-high / late-low profile is a genuine adaptive τ-cliff — the same shape the
+   heavier **MoG task** (per-mode anisotropic noise, ~190× SSE swing) produces, now reachable without
+   the port.
 
-**Consequence for validation:** the random walk is a **correctness sanity check** (the velocity-matching
-policy should converge to `τ≈1` and *match* the fixed-τ=1 W1 — if it instead collapses to low τ, the
-objective/weighting is still wrong). The **real result requires porting the MoG task into this repo**
-(it currently has only the random walk; the dataset + analytic-posterior W1 were built in the sibling
-flow-mog/adaptive-renoise checkout and need porting — see the project memory).
+**Consequence for validation:** the unbiased walk stays a **correctness sanity check** (the policy
+should converge to `τ≈1` and *match* fixed-τ=1 W1 — collapse to low τ there means the
+objective/weighting is still wrong). The **drift walk is now the primary adaptive-headroom test**: the
+bar is to beat the best *fixed* τ on deployed, mode-posterior-weighted W1 with a τ policy that rides
+time-in-episode (high→low). The MoG port (dataset + analytic-mixture-posterior W1, built in the sibling
+flow-mog checkout — see project memory) remains available as a harder, 2-D confirmation but is no
+longer on the critical path.
 
 ---
 
 ## 7. Experiment plan (staged, de-risked)
 
-**Current scope (this run): random walk only — no MoG port.** This is a **Stage-0 machinery/sanity
-run**. On the homogeneous random walk the distributional optimum is the trivial `τ=1` and *no policy
-can beat fixed-τ=1 by construction* (§6). So the success criterion here is **not** "learned renoise
-wins" — it is "the two-network velocity gradient recovers `τ≈1` and matches fixed-τ=1 W1." A genuine
-*win* requires a heterogeneous task (MoG), which is **deferred** (Stage 1 below).
+**Current scope: the hidden-mode drift walk (`drift_m>0`), 4-frame / 5-overlapping-window geometry,
+single-window match (no cross-window BPTT).** The unbiased walk (`drift_m=0`) stays as the Stage-0
+sanity check; the drift walk is the first in-repo task with genuine adaptive headroom (§6), so the
+criterion is two-tiered: (i) on `drift_m=0`, recover `τ≈1` and match fixed-τ=1 W1 (machinery correct);
+(ii) on `drift_m>0`, the policy should ride time-in-episode (τ high early, low late) and **beat the
+best fixed τ** on deployed, mode-posterior-weighted W1.
 
-- **Stage 0 — machinery + sanity (this run).** Run the full velocity-matching loop on the random
-  walk with the small `τ_φ(context, current obs)` policy (geometry: §1/§8 — 2-token window, NFE=3,
-  K_fake=5). Expect `τ→1`, W1 ≈ fixed-τ=1. *Gate: does the two-network velocity gradient recover the
-  known distributional optimum?* If not, fix weighting/fake-lag first.
-- **Stage 1 — per-token policy on a heterogeneous task (DEFERRED).** Port MoG; train `τ_φ`. *Gate:
-  beat the best fixed/banded τ on deployed W1 (the bar prior single-window policies could not clear).*
-  Not in scope for the current run.
+- **Stage 0 — machinery + sanity (`drift_m=0`).** Run the full velocity-matching loop with the small
+  `τ_φ` policy (geometry: §1 — 5-token / 4-frame joint window, NFE=3, K_fake=5). Expect `τ→1`, W1 ≈
+  fixed-τ=1. *Gate: does the two-network velocity gradient recover the known distributional optimum?*
+  If not, fix weighting/fake-lag first.
+- **Stage 1 — adaptive win on the drift walk (`drift_m>0`).** Same machinery, drift dataset. *Gate:
+  beat the best fixed/banded τ on deployed mode-posterior-weighted W1 — the bar prior single-window
+  policies could not clear — with a τ(time-in-episode) that falls high→low.*
 - **Stage 2 — both bases.** Repeat for (a) plain-FM frozen base and (b) self-forcing frozen base
-  (per the user's "test both"). SF co-adaptation may flatten the τ-cliff.
+  (per the user's "test both"). SF co-adaptation may sharpen or flatten the cliff.
+- **Stage 3 — MoG port (optional, harder confirmation).** 2-D latent-mode task; no longer on the
+  critical path now that the drift walk supplies headroom.
 - **Ablations:** the `t`-distribution — default is full-range `U[0,1]`; ablate a mid-band `[t_lo,t_hi]`
   **only if** the small-`t` tail shows up (too-low `t_lo` → small-`t` blow-up; too-high `t_hi` →
   near-noise dominates); single-window vs 2-step unroll; K_fake ratio; on-policy buffer length;
@@ -475,9 +487,9 @@ AdaLN transformer was already extended to support `k_embed_2`/`t2`).
 
 ## 9. Open questions / risks to watch
 
-- **Does the on-policy single-window joint match actually pin the trajectory**, or is the 2-step
-  unroll needed in practice? (Theory says single-window-on-policy suffices at the fixed point;
-  empirics on the cliff will tell.)
+- **Does the on-policy single-window joint (4-frame) match actually pin the trajectory**, or is a
+  multi-window unroll (`K_bptt>1`) needed in practice? (Theory says single-window-on-policy suffices at
+  the fixed point; empirics on the drift cliff will tell.)
 - **Mode-seeking.** The velocity-matching fixed point is mode-seeking; if that hurts the
   coherence/diversity goal, a small coverage / GAN term may be needed — but that reintroduces a second
   moving part.
