@@ -1,516 +1,280 @@
 # Learned Renoise via Velocity-Field Matching
 
-**Branch:** `feat/flow-dmd-renoise`  ·  **Status:** design  ·  **Date:** 2026-06-17
+**Branch:** `feat/flow-dmd-renoise` · **Status:** design · **Updated:** 2026-06-25
 
 ---
 
-## 0. TL;DR — does the idea make sense?
+## 0. TL;DR
 
-**Yes, with four load-bearing refinements.** The proposal — roll out the AR sequence under a
-frozen flow model + a learned per-token renoise policy, fit an auxiliary model `p_gen` to the
-rollout, and update the policy by a *velocity-difference* gradient to align `p_gen → p_data` — is
-theoretically sound and is, importantly, **the principled fix for the exact wall every prior
-renoise-policy experiment hit**: single-window objectives are anti-aligned with deployment
-(point-MSE → mean-seeking / W1 collapse; energy-score → over-diversifies). A proper
-*distribution-matching* objective is the missing ingredient, and no true two-network velocity match
-has been run before in this codebase (the `feat/dmd-renoise-policy` branch is actually a direct
-sample-space MSE/energy loss, not a two-network velocity-difference match).
+Roll out an autoregressive sequence under a **frozen** flow model. Between windows the model
+**renoises** its own previous prediction to a learned per-token level **τ**, then re-denoises. A small
+policy `τ_φ` picks τ. We train it by **velocity-field matching**: fit an online "fake" copy of the flow
+model to the rollout, then push τ so the frozen base (the *real* velocity field) and the fake copy
+agree. Flow matching gives the key fact — *equal velocity fields ⟺ equal distributions* — so this is
+exact distribution matching, needing no score, no KL, and no assumption that the data is Gaussian.
 
-Velocity-field matching is rigorous on its own — flow matching: *equal velocity fields ⟺ equal
-distributions* (§3) — needing no score, no KL, and no Gaussian-data assumption. We match the
-**velocity fields directly** (in $v$, not $\hat x_0$): the objective is the plain velocity-matching
-loss with **unit weighting over all noise levels** $t\sim\mathcal{U}[0,1]$ — the same form the base was
-trained with. There is no heuristic weighting function and no $t$-band by default; restricting $t$ to a
-mid-band is a deferred lever, used only if the small-$t$ tail proves to be a failure mode (§3.3).
+**Why this objective.** Every prior renoise-policy attempt used a single-window loss that is
+mis-aligned with deployment: point-MSE turns the sampler into a mean-seeking point predictor;
+energy-score over-diversifies. A proper distribution-matching objective is the missing piece, and no
+true two-network velocity match has been run in this repo before.
 
-The four refinements that separate "sound" from "will actually work":
-
-1. **Match at the window (joint) level, on-policy** — treat the generator sample as the *full model
-   window* (renoised context tokens **+** freshly generated continuation) and match its joint
-   distribution to real data windows. On-policy contexts carry the compounding/covariate-shift
-   signal that single-window *conditional* losses are blind to.
-2. **Match velocities directly, no heuristic weighting** — inject $g = v_{\text{real}}-v_{\text{fake}}$
-   with unit weight over **all** noise levels $t\sim\mathcal{U}[0,1]$ (not the $\hat x_0$-difference, not
-   a per-sample normalization); no $t$-band by default — a mid-band is a deferred lever if the small-`t`
-   tail misbehaves (§3.3).
-3. **Only the distribution-matching gradient may touch τ** — never let an FM/reconstruction loss
-   backprop into τ (the documented `τ→0` "trust-the-warm-start" collapse, the *Trap*).
-4. **Gate on deployed metrics, on a heterogeneous task** — here *gate* = the accept / checkpoint-
-   selection criterion. Judge the policy **only** by metrics measured on the **free-running
-   (closed-loop) AR rollout** — **seeded RMSE and W1** — never by the velocity-matching loss value or
-   any one-step / self-consistency probe (all shown to pass deployment-bad policies). And validate where
-   adaptive τ has headroom — a task with a τ-cliff, i.e. heterogeneous per-state uncertainty. On the
-   *unbiased* (`drift_m=0`) walk the correct answer is the trivial `τ=1` and no policy can help by
-   construction; the **hidden-mode drift walk** (`drift_m>0`, §1/§6) restores that headroom in-repo
-   (early-uncertain ⇒ high τ, late-certain ⇒ low τ) without needing the heavier MoG port.
-
-The rest of this doc works through the theory, the precise algorithm, the failure modes, and the
-code-level integration.
+**Four choices that make it work:**
+1. **Match whole windows, on-policy** — the renoised context tokens *plus* the freshly generated
+   continuation, jointly — so the gradient sees compounding error, which a single-frame conditional loss cannot.
+2. **Match velocities directly:** inject `g = v_real − v_fake`, unit weight over all noise levels.
+3. **Only the matching gradient may touch τ.** Never let a reconstruction/FM loss backprop into τ — that
+   rewards making the warm-start trivially predictable and collapses τ→0 (the *warm-start collapse*).
+4. **Select only on deployed metrics** (closed-loop RMSE + W1), on a task with real adaptive headroom
+   (the hidden-mode drift walk, §1).
 
 ---
 
-## 1. Setup, notation, and the trade-off
+## 1. Setup and task
 
-**Flow path (this repo's convention, verified in `models/flow.py:93-99`).** With data $d$ and noise $\varepsilon \sim \mathcal{N}(0,I)$,
+**Flow path** (`models/flow.py:93-99`). With data `d` and noise `ε ~ N(0,I)`,
+$$x_t = (1-t)\,d + t\,\varepsilon,\qquad t\in[0,1],$$
+so `t=0` is clean data, `t=1` is pure noise. The velocity target is `v = ε − d`; the network outputs
+`x̂₀ = E[d | x_t]` (`pred_x0`), and the renoise primitive is `q_sample(x,t) = (1−t)x + tε`.
 
-$$x_t = \alpha_t\, d + \sigma_t\, \varepsilon, \qquad \alpha_t = 1-t,\quad \sigma_t = t,\quad t \in [0,1],$$
+**Warm-start renoise rollout.** Frames are generated by a sliding window. The model's previous
+prediction `ŷ` seeds the next window: renoise it to level τ, then run the frozen sampler from there.
+$$w = (1-\tau)\,\hat y + \tau\,\varepsilon,\qquad x = \text{Sampler}_{\text{frozen}}(\text{context},\, w),$$
+with `ε` fresh (so `w` is differentiable in τ); τ is also fed to the frozen model through the
+`t2`/`second_k_emb` channel (also differentiable). τ trades off:
+- **τ→0** — trust the previous prediction → error accumulates, wrong guesses lock in.
+- **τ→1** — discard it → a fresh independent sample (on a strongly-conditioned base this is just standard FM sampling).
 
-so $t=0$ is clean data and $t=1$ is pure noise. The velocity target is $v = \dot\alpha_t\, d + \dot\sigma_t\, \varepsilon = \varepsilon - d$; the objective is `pred_x0` (the network outputs $\hat x_0$, and $v$, $\varepsilon$ are derived); and the renoise primitive is $q_{\text{sample}}(x, t) = (1-t)\,x + t\,\varepsilon$ (`models/flow.py:168-174`).
+**Task — hidden-mode drift walk.** `x_t = x_{t-1} + b_t + z_t`, `z_t ~ N(0,σ)`, sign `b_t ∈ {−1,+1}`.
+A **hidden mode** `s ∈ {−1,+1}` is drawn once per trajectory (never observed) and biases the sign:
+`p(b_t=+1) = 0.5 + s·drift_m`. Because the bias is in the *probability*, a single ±1 step is
+uninformative — the mode shows only in the up/down **frequency** over several steps. This makes the task
+**heterogeneous**: early on the mode is uncertain (wide spread ⇒ high optimal τ — re-infer, don't trust a
+biased warm-start); once the frequency reveals `s`, it is near-certain (⇒ low optimal τ — refine). The
+W1 target is correspondingly **mode-posterior-weighted**: the analytic future re-weights the `2^H` sign
+branches by the Bayes posterior over `s` given the observed history (`w1_distance_traj`). `drift_m` is
+the headroom knob (larger ⇒ sharper mode); `drift_m=0` recovers the unbiased walk, where the optimal τ
+is a trivial constant and no policy can help.
 
-**Task (data distribution).** The 1-D walk $x_t = x_{t-1} + b_t + z_t$, $z_t\sim\mathcal N(0,\sigma)$, increment sign
-$b_t\in\{-1,+1\}$. A **hidden persistent mode** $s\in\{-1,+1\}$ is drawn once per trajectory (never observed)
-and biases the sign: $p(b_t=+1)=0.5 + s\cdot\texttt{drift\_m}$. The bias lives in the sign *probability*, not as
-an additive level, so any single increment (always $\pm1$) is uninformative — the mode is revealed only by the
-up/down **frequency** over several steps. $\texttt{drift\_m}=0$ recovers the original unbiased walk. **This is what
-makes the task heterogeneous:** early in an episode the mode is uncertain (predictive spread wide ⇒ high optimal
-τ — re-infer rather than trust a biased warm-start); late, once the frequency has revealed $s$, it is near-certain
-(⇒ low optimal τ — refine). That early-high / late-low structure is the in-repo analog of the MoG latent-mode
-τ-cliff (§6). The W1 metric is correspondingly **mode-posterior-weighted**: the analytic target re-weights the
-$2^H$ future branches by the Bayes posterior over $s$ inferred from the observed history (`w1_distance_traj`,
-`drift_m>0` path in `synthetic_task.py`). `drift_m` is the headroom knob (larger ⇒ sharper mode, stronger cliff).
+**Geometry** (from configs). 1-D token, 10-frame episode, `context_frames=1`, `open_loop_horizon=1`.
+With `prediction_horizon=4`, each window predicts 4 frames from one renoised context token, and the
+slide-by-1 rollout yields **5 overlapping windows** per episode. The match **window** is
+`W = [1 renoised context token ; 4 generated tokens]`, matched **jointly**. Overlap is deliberate — it
+is the deployment cadence (the policy renoises every frame), so training and the selection rollout see
+the identical window stream. Per-frame sampler **NFE=3**.
 
-**Warm-start renoise AR rollout.** Frames are generated by a sliding window. The model's prediction
-of the previous frame, `ŷ`, seeds the next window: we renoise it to a per-token level `τ` and run
-the frozen sampler from there.
-
-$$w = q_{\text{sample}}(\hat y, \tau) = (1-\tau)\,\hat y + \tau\,\varepsilon, \qquad x = \text{Sampler}_{\text{frozen}}\big(\text{context},\ \text{warm-start} = w\big)$$
-
-with $\varepsilon$ fresh (reparameterized $\Rightarrow$ $w$ is differentiable in $\tau$), and $\tau$ also fed to the frozen model through the `t2`/`second_k_emb` channel (also differentiable).
-
-`τ ∈ [0,1]` is the knob on the **drift ↔ forgetting** trade-off:
-- `τ→0`: trust the (biased) previous prediction → error accumulation, wrong-mode lock-in, *compounding*.
-- `τ→1`: discard the past → fresh independent sample, loses temporal coherence (but on a strongly-conditioned base, recovers standard FM sampling).
-
-**Bayesian reading (matches the repo name).** Renoise-then-denoise is a posterior update: the
-warm-start `ŷ` is a temporal *prior*, `τ` sets how much to trust it (prior precision ∝ `1/τ`), and
-the frozen denoiser is the projection back to the data manifold (an SDEdit-style manifold
-projection). The policy learns the **per-token minimum noise that washes out accumulated bias while
-preserving the temporal information needed for coherence** — exactly the stated goal.
-
-**Policy.** `τ = τ_φ(·)`, a small network (`models/renoise_policy.py`, ~20k params). Inputs: the
-renoised warm-start `ŷ`, the current context token `c_last`, and **`step_norm` = time-in-episode**
-(plus an optional `drift_features` channel). Time-in-episode is **load-bearing on the drift task** —
-the adaptive optimum is fundamentally temporal (τ high while the mode is uncertain early, low once the
-up/down frequency has revealed it), so the policy must know where in the episode it sits. (On the
-unbiased walk this input is inert; the policy is free to ignore it.) The net otherwise reads the same
-state the base conditions on and emits τ. *(Note: this updates the earlier "no hand-engineered
-features" stance — the heterogeneous task makes time-in-episode necessary, and the code already passes
-it: `self.policy(y, c_last, step_norm)`.)*
-
-**Geometry (locked, from configs).** 1-D scalar token (`observation_shape: [1]`, no actions);
-episode = 10 frames; `context_frames = 1`, `open_loop_horizon = 1` (slide-by-1, so windows
-**overlap**), sliding causal window. With `prediction_horizon = 4`, each window predicts **4 frames**
-from one renoised context token, and the slide-by-1 rollout yields **5 windows** per episode
-($n_{\text{update\_runs}} = n_{\text{frames}} - \texttt{prediction\_horizon} - \texttt{context\_frames} = 10 - 4 - 1 = 5$).
-The match **window** is therefore `W = [1 renoised context token ; 4 freshly generated tokens]`
-(5 tokens), matched **jointly**. The free-running deployment gate runs the *same* 4-frame, slide-by-1
-rollout. Per-frame sampler **NFE=3** (`update_sampling_timesteps=3`). *Overlapping (slide-by-1) is
-deliberate: it is exactly the deployment cadence — the policy renoises every frame — so training and
-the gate see the identical window stream, and each frame is matched at multiple horizon offsets as the
-window slides over it. (Was `prediction_horizon=5`, 2-token / single-frame window; the move to 4-frame
-joint windows is what lets the per-window match see intra-window coherence.)*
+**Policy.** `τ_φ` is a small net (~20k params) reading the renoised warm-start `ŷ`, the current context
+token `c_last`, and `step_norm` = **time-in-episode**. Time-in-episode is load-bearing on the drift task
+(the optimum is τ-high-early / τ-low-late), so the policy must know where in the episode it sits. On the
+unbiased walk this input is inert and the policy can ignore it.
 
 ---
 
-## 2. Why this is the right objective (and prior ones weren't)
+## 2. Why this objective, and why prior ones failed
 
-Documented results from the prior renoise-policy work (`RESULTS_adaptive_renoise_sf.md`,
-flow-mog `RESULTS_v4/v5.md`), all on single-window policy losses:
+Prior renoise-policy results (`RESULTS_adaptive_renoise_sf.md`, flow-mog `RESULTS_v4/v5.md`), all
+single-window:
 
 | policy objective | closed-loop RMSE | deployment W1 | failure |
 |---|---|---|---|
 | fixed τ=0.1 | 1.922 | **3.117 (best)** | — |
-| one-step **MSE** policy | **1.822 (best)** | 4.748 (+43%) | mean-seeking: turns a sampler into a point predictor |
-| one-step **energy-score** policy | 1.964 | 3.986 | over-diversifies; strictly dominated by fixed τ=0.1 |
+| one-step **MSE** policy | **1.822 (best)** | 4.748 (+43%) | mean-seeking — sampler becomes a point predictor |
+| one-step **energy-score** policy | 1.964 | 3.986 | over-diversifies; strictly worse than fixed τ=0.1 |
 
-Key quoted lessons:
-- *"the benefit of warm-start reuse (multi-window refinement) is invisible to any single-window loss."*
-- *"optimizing a renoise policy against squared error quietly converts a generative sampler into a point predictor."*
-- *"the self-consistency probe passes deployment-bad policies … selection must be on deployed metrics."*
-- *Trap:* *"Driving the SF loss into tau rewards making the source→target bridge trivially predictable (tau→0), which rediscovers the warm-start collapse."*
+Key lessons: *the benefit of warm-start reuse is invisible to any single-window loss*; *squared-error
+quietly converts a sampler into a point predictor*; *one-step / self-consistency probes pass
+deployment-bad policies, so selection must be on deployed metrics*.
 
 **Why distribution matching escapes this.** Matching the full velocity field (equivalently, the full
-distribution) is satisfied **only** when the distributions agree — it cannot be reduced by collapsing
-to the conditional mean (unlike MSE) nor does it reward gratuitous spread (unlike a bare energy
-score). It is the correct "between" objective the prior two losses bracketed. Combined with
-**on-policy** rollouts (drifted contexts) and **window-level** matching, it sees compounding error
-directly. This is genuinely new: no prior experiment here used a real two-network velocity-difference
-gradient.
+distribution) is satisfied *only* when the distributions agree — it cannot be reduced by collapsing to
+the mean (unlike MSE) and does not reward gratuitous spread (unlike energy score). It is the correct
+objective the prior two bracketed. With **on-policy** rollouts and **window-level** matching it also
+sees compounding error directly.
 
 ---
 
 ## 3. Theory: velocity-field matching
 
-### 3.0 Why this needs no Gaussian-data (or KL) assumption
+Derived from one requirement — *make the generated window distribution equal the data distribution* —
+to the exact objective and gradient, with no heuristic step.
 
-We align the rollout to data by matching **velocity fields**, and that is rigorous on its own — no
-score, no KL, no Gaussianity of the data:
+**Notation.** For any window distribution `q₀`, the flow path defines marginals
+`q_t(x) = ∫ q₀(d) N(x; (1−t)d, t²I) dd`, with `q₁ = N(0,I)` for every `q₀`. Its marginal velocity field is
+$$v^q_t(x) = \mathbb E_q[\varepsilon - d \mid x_t = x] = \frac{x - \hat x_0^{\,q}(x,t)}{t},\qquad \hat x_0^{\,q}(x,t) = \mathbb E_q[d\mid x_t=x].$$
+Velocity and denoiser are the same object up to this exact path identity (no distributional assumption).
 
-> **Characterization.** For two distributions carried by the same flow-matching path from the same
-> Gaussian source $p_1=\mathcal{N}(0,I)$, $\;p_{\text{gen}}=p_{\text{data}} \iff v_{\text{gen}}(x,t)=v_{\text{data}}(x,t)$
-> for all $(x,t)$ on the support. The marginal velocity field is what transports $p_1\to p_0$; two
-> fields that agree everywhere generate the same distribution. This is flow matching's own foundation.
-
-The data $p_{\text{data}}$ may be arbitrary (random walk, MoG, …). The only Gaussianity in play is the
-*noising kernel* $x_t\mid d\sim\mathcal{N}(\alpha_t d,\sigma_t^2 I)$ — true by construction — which is all
-that is needed to *define* the marginal velocity $v_t(x)=\mathbb{E}[\varepsilon-d\mid x_t{=}x]$. So matching
-velocities is exact for any data. (The score / reverse-KL view is an equivalent option that gives the
-same update; we do not use it — see "Relation to existing methods" at the end.)
-
-### 3.1 Velocity and denoiser are the same object
-
-The network outputs $\hat x_0(x,t)=\mathbb{E}[d\mid x_t{=}x]$ (`pred_x0`, the denoiser). Velocity and
-denoiser are interchangeable by a path identity (no distributional assumption — just $x_t=(1-t)d+t\varepsilon$):
-
-$$v_t(x) = \frac{x - \hat x_0(x,t)}{t} \qquad\Longleftrightarrow\qquad \hat x_0(x,t) = x - t\,v_t(x).$$
-
-So the per-point field discrepancy between rollout and data is, equivalently, a difference of
-reconstructions:
-
-$$v_{\text{gen}}(x,t) - v_{\text{data}}(x,t) \;=\; \frac{\hat x_{0,\text{data}}(x,t) - \hat x_{0,\text{gen}}(x,t)}{t}.$$
-
-Both sides are native model outputs. *(Optional score connection, never used below: $s_t = ((1-t)\hat x_0 - x)/t^2$, hence $v_{\text{gen}}-v_{\text{data}} = -\tfrac{t}{1-t}(s_{\text{gen}}-s_{\text{data}})$.)*
-
-### 3.2 The objective and the policy gradient
-
-**Objective (velocity form — what we implement).** Minimize the velocity-field mismatch on the rollout support,
-
-$$\mathcal{D}(\varphi) = \mathbb{E}_{t\sim\mathcal{U}[0,1]}\,\mathbb{E}_{x\sim p_t^{\text{gen}}}\Big[\, \big\lVert v_{\text{real}}(x,t) - v_{\text{fake}}(x,t) \big\rVert^2 \,\Big] \;\ge\; 0,$$
-
-with **unit weighting over all noise levels** — this is exactly the object the §3.0 characterization is
-about, and it is zero exactly when the velocity fields coincide on the rollout support $\Rightarrow p_{\text{gen}}=p_{\text{data}}$.
-Here $v_{\text{real}}$ comes from the **frozen base** (the real velocity field, for free) and $v_{\text{fake}}$ from a
-second flow net tracked online on the current rollout (§4). Each velocity is read off the raw `pred_x0`
-output via $v=(x-\hat x_0)/t$ (§3.1) — the $1/t$ is the *exact* identity, not a weighting (the numerical
-floor on $t$, §3.3, just keeps it from dividing by ~$0$).
-
-*Why velocity, not $\hat x_0$:* the two losses differ only by a $t$-profile — $\lVert\hat x_{0,\text{real}}-\hat x_{0,\text{fake}}\rVert^2 = t^2\lVert v_{\text{real}}-v_{\text{fake}}\rVert^2$, so "denoiser-space, weight 1" *is* "velocity-space, weight $t^2$." Choosing the
-representation **is** choosing the weighting; we pick velocity because it is the canonical variable the
-characterization speaks in, and weight 1 there needs no heuristic $w(t)$. Its one quirk — a relative
-$1/t$ emphasis toward small $t$, which is *where the informative discrepancies live* (§3.3) — is left
-unrestricted by default; if it manifests as a failure mode (a noisy small-$t$ tail) the $t$-band is the lever (§3.3).
-
-**Policy gradient (velocity-difference).** Hold both velocity fields fixed (stop-grad: $v_{\text{real}}$ frozen,
-$v_{\text{fake}}$ separately fit) and move generated samples to shrink the mismatch. Inject on each sample
-$x_t$ the surrogate gradient
-
-$$\boxed{\; g(x_t) \;=\; v_{\text{real}}(x_t,t) - v_{\text{fake}}(x_t,t) \;}$$
-
-and backprop $\partial x_t/\partial\varphi$ (through the renoise reparameterization **and** the $t2$
-conditioning) to $\varphi$; take a gradient-**descent** step. **Net effect:** each sample moves along
-$v_{\text{fake}}-v_{\text{real}}$, equivalently toward the real reconstruction $\hat x_{0,\text{real}}$ — cancelling
-the *excess transport drift* that distinguishes the rollout from data. **Fixed point** (expressive policy,
-converged fake net): $v_{\text{fake}}=v_{\text{real}}$ on the rollout support, i.e. matched.
-
-**Sign note (prevents a real bug).** The injected difference is ordered $(v_{\text{real}}-v_{\text{fake}})$ —
-**real minus fake**, the *opposite* ordering from the denoiser difference $(\hat x_{0,\text{fake}}-\hat x_{0,\text{real}})$,
-because $v=(x-\hat x_0)/t$ flips the sign: $\hat x_{0,\text{fake}}-\hat x_{0,\text{real}}=t\,(v_{\text{real}}-v_{\text{fake}})$. Both descend the sample
-toward $\hat x_{0,\text{real}}$; the only safe check is the *effect* (sample moves toward the real reconstruction),
-not the literal operand order. **Stop-grad both nets' weights** — we use their *values*, not their $\varphi$-gradients.
-
-**On exactness.** This drops the velocity Jacobian $\partial v/\partial x$ that the exact $\nabla_\varphi\mathcal{D}$
-would carry — a deliberate, standard simplification (lower variance and cost; same fixed point
-$v_{\text{fake}}=v_{\text{real}}$).
-
-### 3.3 The `t`-distribution: full range by default, band as a deferred lever
-
-There is no heuristic weighting function. The velocity objective fixes the $t$-profile canonically
-(weight 1, §3.2); the only remaining choice is the **distribution we draw $t$ from**, and that is a
-sampling/validity choice, not a tuned weight. **Default: sample all noise levels,** $t\sim\mathcal{U}[0,1]$ —
-the simplest, assumption-free choice; we add structure only if the data demands it.
-
-Two known properties to keep in mind (neither is restricted by default):
-
-1. **Near-noise is uninformative.** Near $t\to1$ both $p_t^{\text{gen}},p_t^{\text{data}}$ are heavily smoothed
-   toward the same $\mathcal{N}(0,I)$, so a velocity difference there says little about $p_{\text{data}}$'s structure.
-   The informative discrepancies (manifold bias, lost coherence) live nearer $t\to0$ — which the velocity
-   loss already emphasizes (its $1/t$ relative to the denoiser difference puts weight on **small $t$ / near data**, the right direction).
-2. **Small-$t$ amplification.** That same $1/t$ means $g=v_{\text{real}}-v_{\text{fake}}$ grows as $t\to0$ and can get
-   noisy if either net is shaky near the data manifold. Two cheap guards we keep on from the start: a **numerical
-   floor** (draw $t\sim\mathcal{U}[\epsilon,1{-}\epsilon]$ with $\epsilon$ at/above `numerical_stabilizer` $\approx10^{-4}$, so we never literally divide by $0$) and **global grad-norm clipping** (a standard optimizer device — **not** a per-sample loss normalization, which would sneak a $t$-weight back in).
-
-**The deferred lever.** If the small-$t$ tail shows up as an actual failure mode (gradient-scale
-instability, divergence traceable to near-data samples), restrict to a mid-band $t\sim\mathcal{U}[t_{\text{lo}},t_{\text{hi}}]$
-(e.g. $[0.1,0.9]$): $t_{\text{lo}}$ caps the factor at $1/t_{\text{lo}}$, $t_{\text{hi}}$ drops the uninformative near-noise end.
-This is an **ablation (§7), not a default** — add it only on evidence.
-
-### 3.4 The frozen base is the real velocity field — and where it's trustworthy
-
-$v_{\text{data}}$ is **free**: the frozen base, trained on real data over all noise levels, *is* the real
-velocity/denoiser field (no separate teacher needed). Two caveats handled by design:
-- **Validity region.** The base is only accurate on in-distribution inputs. Two things keep queries
-  in-region: (a) we evaluate the mismatch at *noised* points $x_t$ with $t$ bounded away from 0, where
-  the base was trained; (b) the renoise itself pushes the window toward the noise distribution where
-  the base is reliable. At the optimum the rollout is on-manifold, where the base is exact.
-- **Joint window, shared $t$.** Match the **joint window** field, not a per-frame conditional. Noise
-  the generated window with a **shared $t$** (sampled per window), exactly how the base is trained by
-  default (`inter_time: uniform` repeats one $t$ across frames, `flow_base.py:160-163`) — so
-  $v_{\text{real}}(W_t,t)$ is a valid joint-window field. (For per-token eval noise later, train/enable the
-  base's `random_all` per-token mode; `second_k_emb`/`t2` already supports it.) The policy's per-token
-  $\tau$ lives only in the *generation* path, decoupled from the eval $t$.
-
-### 3.5 Clean derivation: from "match distributions" to the objective
-
-This subsection derives, from the single requirement *"make the generated distribution equal the data
-distribution,"* the exact functional we minimize and the exact gradient we inject — with no heuristic step
-in between. Everything above (§3.0–3.4) is the toolbox; here it is assembled in order.
-
-**Goal.** Choose the renoise policy $\varphi$ so that the distribution of on-policy windows $p^{\varphi}_{\text{gen}}$
-equals the data window distribution $p_{\text{data}}$.
-
-**Notation.** For *any* window distribution $q_0$, the flow-matching path defines marginals
-$$q_t(x) \;=\; \int q_0(d)\,\mathcal N\!\big(x;\,(1-t)d,\,t^2 I\big)\,dd, \qquad t\in[0,1],$$
-where the noising kernel is Gaussian *by construction* while $q_0$ is arbitrary, and $q_1=\mathcal N(0,I)$ for
-every $q_0$. Its marginal velocity field is the conditional expectation (§3.1)
-$$v^{q}_t(x) \;=\; \mathbb E_{q}\!\left[\varepsilon - d \,\middle|\, x_t = x\right] \;=\; \frac{x - \hat x^{\,q}_0(x,t)}{t}, \qquad \hat x^{\,q}_0(x,t)=\mathbb E_q[d\mid x_t=x].$$
-
-**Step 1 — distribution equality $\Leftrightarrow$ velocity equality.**
-By the continuity equation, $v^{q}$ is the *unique* marginal drift whose ODE $\dot x_t = v^{q}_t(x_t)$ transports
-the common source $q_1=\mathcal N(0,I)$ to $q_0$. Hence, for $p_{\text{gen}}$ and $p_{\text{data}}$ sharing that source
-and that kernel,
-$$p_{\text{gen}} = p_{\text{data}} \;\;\Longleftrightarrow\;\; v^{\text{gen}}_t(x)=v^{\text{data}}_t(x)\ \ \ \forall\,t\in(0,1],\ x\in\operatorname{supp}(p^{\text{gen}}_t).$$
-($\Rightarrow$) equal $q_0$ $\Rightarrow$ equal marginals $q_t$ $\Rightarrow$ equal posteriors $\Rightarrow$ equal fields.
-($\Leftarrow$) equal fields + equal terminal $q_1$ $\Rightarrow$ equal transport $\Rightarrow$ equal $q_0$. The marginals
-$p_t$ have full support for every $t>0$ (a Gaussian convolution), so "on the support" is "everywhere." *No
-Gaussian-data and no KL assumption enters* — the only Gaussianity is the kernel that **defines** $v^{q}$.
+**Step 1 — distribution equality ⟺ velocity equality.** `v^q` is the unique drift whose ODE transports
+the shared source `q₁ = N(0,I)` to `q₀`. Hence
+$$p_{\text{gen}} = p_{\text{data}} \;\Longleftrightarrow\; v^{\text{gen}}_t(x) = v^{\text{data}}_t(x)\quad \forall\, t\in(0,1],\ x\in\operatorname{supp}(p^{\text{gen}}_t).$$
+The only Gaussianity used is the *noising kernel* (true by construction) that defines `v^q`; the data
+itself may be arbitrary. No KL, no Gaussian-data assumption.
 
 **Step 2 — a population objective that is zero iff matched.**
-Velocity equality everywhere is exactly the statement that this non-negative functional vanishes:
-$$\boxed{\;\mathcal D(\varphi) \;=\; \int_0^1 \mathbb E_{x\sim p^{\text{gen}}_t}\big\lVert v^{\text{data}}_t(x) - v^{\text{gen}}_t(x)\big\rVert^2\,dt \;\ge\;0,\qquad \mathcal D(\varphi)=0 \iff p_{\text{gen}}=p_{\text{data}}.\;}$$
-The expectation is taken under $x\sim p^{\text{gen}}_t$ because the rollout is all we can sample; vanishing on the
-rollout support is precisely what the Step-1 characterization requires. This **is** the §3.2 objective, with the
-two fields named: $v^{\text{data}}=v_{\text{real}}$, $v^{\text{gen}}=v_{\text{fake}}$.
+$$\mathcal D(\varphi) = \int_0^1 \mathbb E_{x\sim p^{\text{gen}}_t}\,\big\lVert v^{\text{data}}_t(x) - v^{\text{gen}}_t(x)\big\rVert^2\,dt \;\ge\; 0,\qquad \mathcal D=0 \iff p_{\text{gen}}=p_{\text{data}}.$$
+The expectation is under the rollout `p^gen_t` because that is all we can sample; vanishing there is
+exactly what Step 1 requires. Write `v_real = v^data`, `v_fake = v^gen`.
 
 **Step 3 — both fields are obtainable.**
-- $v^{\text{data}}=v_{\text{real}}$ is *free*. The frozen base was trained by FM regression on data, whose pointwise
-  minimizer is the conditional expectation $\mathbb E_{\text{data}}[\varepsilon-d\mid x_t]=v^{\text{data}}$. So the base
-  literally **is** the real field (§3.4).
-- $v^{\text{gen}}=v_{\text{fake}}$ has no closed form, so we *estimate it online*. Fit a second FM net
-  $\theta_{\text{fake}}$ to the current rollout windows with the **same** regression,
-  $$\min_{\theta}\ \mathbb E_{t,\;d\sim p_{\text{gen}},\;\varepsilon}\ \big\lVert f_\theta(x_t,t)-(\varepsilon-d)\big\rVert^2,$$
-  whose pointwise minimizer is $f_{\theta^\star}(x,t)=\mathbb E_{p_{\text{gen}}}[\varepsilon-d\mid x_t=x]=v^{\text{gen}}_t(x)$.
-  That is why the "fake" net tracks the *rollout's* field — and why it must be kept fresh as $\varphi$ moves
-  (two-timescale, $K_{\text{fake}}$ steps per policy step, §4).
+- `v_real` is **free**: the frozen base was trained by FM regression on data, whose pointwise minimizer
+  is `E_data[ε−d | x_t] = v_real`. The base *is* the real field.
+- `v_fake` has no closed form, so **estimate it online**: fit a second FM net `θ_fake` to the current
+  rollout windows with the same regression; its minimizer is `E_gen[ε−d | x_t] = v_fake`. This is why the
+  fake net tracks the *rollout's* field and must be kept fresh as τ moves (two-timescale).
 
-**Step 4 — the gradient on $\varphi$, and why it is just $v_{\text{real}}-v_{\text{fake}}$.**
-We reduce $\mathcal D$ by pushing each generated sample. The descent injects, at each noised sample $x_t$, the
-per-sample surrogate gradient
-$$g(x_t) \;=\; v_{\text{real}}(x_t,t)-v_{\text{fake}}(x_t,t),\qquad \varphi \leftarrow \varphi - \eta\, g^{\top}\frac{\partial x_t}{\partial\varphi},$$
-so each sample moves along $-g = v_{\text{fake}}-v_{\text{real}} = \big(\hat x_{0,\text{real}}-\hat x_{0,\text{fake}}\big)/t$ — *from the
-fake reconstruction toward the real one* (§3.1), cancelling the excess drift that separates rollout from data.
-Two equivalent readings certify this is the right $g$:
+**Step 4 — the gradient on φ.** Hold both fields fixed (stop-grad) and push each generated sample to
+shrink the mismatch. Inject at each noised sample `x_t`
+$$\boxed{\,g(x_t) = v_{\text{real}}(x_t,t) - v_{\text{fake}}(x_t,t)\,},\qquad \varphi \leftarrow \varphi - \eta\, g^{\top}\frac{\partial x_t}{\partial\varphi},$$
+backpropagating through the renoise reparameterization and the `t2` conditioning. Each sample moves
+along `−g`, i.e. from the fake reconstruction *toward the real one* `x̂₀,real` — cancelling the excess
+drift that separates rollout from data. **Fixed point:** `v_fake = v_real` on the rollout support, i.e.
+matched. (This drops the field Jacobian `∂v/∂x` — a deliberate, standard simplification: cheaper, lower
+variance, same fixed point.)
 
-1. **Velocity-matching reading.** $g$ is $\tfrac12\,\nabla_{x_t}\lVert v_{\text{real}}-v_{\text{fake}}\rVert^2$ with the
-   field Jacobians $\partial v/\partial x_t$ held fixed — i.e. the integrand of $\mathcal D$ descended in sample space.
-   Dropping the Jacobian is the deliberate simplification of §3.2 ("On exactness"): cheaper, lower-variance,
-   **same fixed point** $v_{\text{fake}}=v_{\text{real}}$.
-2. **Reverse-KL reading.** Substituting $s_{\text{real}}-s_{\text{fake}}=-\tfrac{1-t}{t}\,(v_{\text{real}}-v_{\text{fake}})$
-   (§3.1), the same $g$ equals the per-sample gradient of $\int_0^1 w(t)\,\mathrm{KL}\!\big(p^{\text{gen}}_t\,\Vert\,p^{\text{data}}_t\big)\,dt$
-   under the weight $w(t)=t/(1-t)$. In words: **velocity-space with unit weight = reverse-KL with weight
-   $t/(1-t)$.** This is exactly the DMD / Diff-Instruct gradient — obtained here *without* ever invoking a score
-   or a KL (§"Relation to existing methods").
+*Sign note:* the ordering is **real − fake**, opposite the denoiser difference, because `v=(x−x̂₀)/t`
+flips the sign (`x̂₀,fake − x̂₀,real = t(v_real − v_fake)`). Check the *effect* (sample moves toward the
+real reconstruction), not the operand order.
 
-Both readings share the identical fixed point — $v_{\text{fake}}=v_{\text{real}}$ on the rollout support, hence
-$p_{\text{gen}}=p_{\text{data}}$ by Step 1 — so the *implemented update* is consistent with the *certificate*
-$\mathcal D=0$. The two-network structure ($\theta_{\text{real}}$ frozen, $\theta_{\text{fake}}$ online, $\varphi$ the
-policy) is forced by Steps 3–4, not chosen by analogy.
+**Step 5 — the invariant.** Only `g` may reach φ. The fake-net regression trains `θ_fake` on stop-grad
+rollouts; the matching gradient trains φ alone. Letting any reconstruction/FM term backprop into φ would
+optimize "make the warm-start predictable" (τ→0, the warm-start collapse) instead of "match
+distributions." This is the architectural invariant of §4–5.
 
-**Step 5 — the invariant the derivation forces.** Only $g$ may reach $\varphi$. The fake-model regression (Step 3)
-trains $\theta_{\text{fake}}$ on **stop-grad** rollouts; the matching gradient (Step 4) trains $\varphi$ alone. Letting
-any reconstruction/FM term backprop into $\varphi$ would optimize "make the source→target bridge predictable"
-($\tau\to0$, the *Trap*) instead of "match distributions," breaking the derivation at Step 2. This is the
-architectural invariant of §4/§5, here re-derived rather than asserted.
+### Practical notes
+
+- **Velocity, not denoiser.** The two losses differ only by a `t`-profile
+  (`‖x̂₀,real − x̂₀,fake‖² = t²‖v_real − v_fake‖²`), so the representation *is* the weighting. Velocity
+  with unit weight needs no heuristic `w(t)` and is the variable the characterization speaks in. Read each
+  velocity off `pred_x0` via `v=(x−x̂₀)/t` (the `1/t` is the exact identity, not a weight).
+- **Noise-level range.** Default `t ~ U[ε, 1−ε]` (all levels; `ε ≈ numerical_stabilizer ≈ 1e-4` so we
+  never divide by ~0), plus global grad-norm clipping. The informative discrepancies live near `t→0`,
+  which the velocity loss already emphasizes. **Deferred lever:** if the small-`t` tail becomes unstable,
+  restrict to a mid-band `t ~ U[t_lo, t_hi]` (e.g. `[0.1,0.9]`) — an ablation, not a default.
+- **Joint window, shared t.** Match the joint 4-frame window with a single `t` per window (how the base
+  is trained, `inter_time: uniform`), so `v_real(W_t,t)` is a valid joint-window field. The base is only
+  trustworthy in-distribution; evaluating at noised points with `t` bounded from 0 keeps queries in-region.
+- **Relation to DMD / Diff-Instruct.** Substituting the score identity
+  `s_real − s_fake = −(t/(1−t))(v_real − v_fake)` shows the same `g` is the reverse-KL gradient under
+  weight `w(t)=t/(1−t)`. So **velocity-space, unit weight = reverse-KL, weight `t/(1−t)`** — exactly the
+  DMD gradient, obtained here without invoking a score or a KL. We keep the unit-weighted velocity form
+  and skip DMD's per-sample normalization (which would smuggle a `t`-weight back in).
 
 ---
 
 ## 4. The algorithm
 
-Mapping onto the user's four steps, with the refinements folded in.
+**Parameters:** `θ_real` (frozen base = real field), `θ_fake` (online copy, the rollout's field), `φ`
+(policy, randomly initialized — no optimum warm-start; the curriculum carries early rollouts). Optional:
+an EMA behavior policy and a short FIFO buffer of recent on-policy windows.
 
-**Initialize** three parameter sets:
-- $\theta_{\text{real}}$ — the frozen base (the real velocity/denoiser field), `requires_grad_(False)`.
-- $\theta_{\text{fake}}$ — an online copy of the base (the auxiliary `p_gen` denoiser), trainable; reuse the `_create_model_copy` plumbing.
-- $\varphi$ — the renoise policy, **randomly initialized** (small net). We do *not* warm-start $\bar\tau$ at the fixed-$\tau$ sweep optimum; the curriculum below (teacher-forced→free, short→long) carries the early rollouts, so a flat optimum-init buys nothing.
-- *Optional:* an EMA behavior policy $\varphi_{\text{ema}}$ (two-timescale) and a short FIFO buffer of recent on-policy windows.
+Repeat:
 
-Then repeat steps (1)–(4):
+1. **Rollout (on-policy).** Free-run the AR sequence with `θ_real` (eval, but grad enabled through the
+   warm-start input) and the behavior policy. NFE=3 per frame. Collect each window
+   `W = [renoised context ; generated continuation]`; τ enters `W` through both the renoise and the `t2`
+   conditioning (keep both differentiable).
+2. **Update the fake net.** `K_fake=5` steps of the standard FM/`pred_x0` loss on **stop-grad** rollout
+   windows (shared-`t`), drawn from the on-policy buffer. Two-timescale: fake net stays ahead of φ.
+3. **Update the policy.** For each window: sample `t ~ U[ε,1−ε]`, noise the window `W_t`, query both nets
+   (weights stop-gradded), convert to velocities, form `g = v_real − v_fake`, and backprop
+   `g` through `W_t → W → renoise(τ_φ) → φ`; Adam step. **Invariant: only `g` trains φ.**
+4. **Periodically evaluate the selection criterion** (free-running RMSE + W1) and checkpoint the best.
 
-**(1) Rollout (on-policy).** Free-run the AR sequence with $\theta_{\text{real}}$ (in eval, but with **grad enabled through the warm-start input**) and the behavior policy ($\varphi$ or $\varphi_{\text{ema}}$). Use a **3-step** sampler per frame (**NFE=3**, `update_sampling_timesteps=3`) — locked for this run. For each window collect the **generator sample**
-$$W = \big[\,\text{renoised context tokens}\;;\;\text{freshly generated continuation}\,\big].$$
-$\tau$ enters $W$ **both** through the reparameterized renoise $w=(1-\tau)\hat y+\tau\varepsilon$ **and** through the `t2` conditioning — keep both differentiable.
+**Granularity.** Primary objective = **single-window joint** match, on-policy. The on-policy context
+already encodes the cumulative effect of past τ-choices, so a fixed point where every window matches data
+*is* a trajectory whose marginals match data — this is what makes single-window-but-on-policy different
+from the prior single-window *conditional* losses. **Cross-window backprop is OFF by default**
+(`K_bptt=1`). A short multi-window unroll (`K_bptt=2`, truncated BPTT) is the reserved extension for
+cross-window compounding — add it only if the 4-frame match underperforms on the selection metric, and
+keep it ≤2 (4-step BPTT destabilized before).
 
-**(2) Update `p_gen` (the fake denoiser).** Take $K_{\text{fake}}$ steps of the standard FM / `pred_x0` loss on **stop-grad** rollout windows (shared-$t$ noising). Two-timescale: $K_{\text{fake}}=5$ per policy step (locked). Draw windows from the short on-policy FIFO buffer to lower variance without reintroducing staleness.
-
-**(3) Update the policy $\varphi$.** For a (truncated-BPTT) set of windows $W$ from step (1):
-- sample a shared level over the full range $t\sim\mathcal{U}[\epsilon,1{-}\epsilon]$ ($\epsilon\approx$ `numerical_stabilizer`; no mid-band by default, §3.3) and noise the window, $W_t = q_{\text{sample}}(W,t)$;
-- query both nets with weights **stop-gradded** at $(W_t,t)$ — read $\hat x_{0,\text{real}},\hat x_{0,\text{fake}}$ from `pred_x0` and convert each to velocity $v=(W_t-\hat x_0)/t$ (the $1/t$ is the exact identity, §3.1; $t\ge\epsilon$ keeps the division well-conditioned);
-- form the velocity-field-mismatch gradient (§3.2),
-$$g \;=\; v_{\text{real}}(W_t,t) - v_{\text{fake}}(W_t,t),$$
-whose descent moves $W$ toward $\hat x_{0,\text{real}}$ (real **minus** fake — see the §3.2 sign note);
-- backprop $g$ through $W_t \to W \to \text{renoise}(\tau_\varphi) \to \varphi$ and take an Adam step (reduce the velocity-field mismatch).
-
-> **Invariant.** No reconstruction/FM term ever backprops into $\varphi$ (the *Trap*) — only $g$ trains $\varphi$.
-
-**(4) Repeat,** periodically evaluating the deployment gate (free-running seeded RMSE + exact-OT W1) and checkpointing the best-by-gate policy.
-
-**Granularity (the key choice).** Primary objective = **single-window joint** matching, on-policy —
-where "window" is now the **joint 4-frame continuation** (`[1 renoised context ; 4 generated]`),
-matched as one distribution against the mode-posterior-weighted data target. The on-policy context
-distribution already encodes the cumulative consequence of the policy's past τ-choices, so a fixed
-point where every window's joint matches data *is* a trajectory whose finite-dimensional marginals
-match data (telescoping under the Markov/sliding-window structure) — this is what makes
-single-window-but-on-policy genuinely different from the prior single-window *conditional* MSE.
-**Cross-window backprop is OFF by default.** The 5 sliding windows are matched independently (each
-on-policy, but no BPTT *across* the warm-start boundary between windows); the unroll depth `K_bptt`
-is a **config lever** (default `1` = within-window only). A short multi-window unroll (`K_bptt=2`,
-truncated BPTT) is the reserved extension to penalize cross-window compounding inside the gradient —
-introduce it *only* if the single-window 4-frame match underperforms on the gate, and keep it ≤2
-(prior work found 4-step BPTT destabilized). The 4-frame joint window already buys *intra*-window
-coherence; cross-window compounding is the part deferred behind `K_bptt`.
-
-**Gradient cost.** `∂W/∂φ` differentiates through the frozen sampler w.r.t. the warm-start input
-(weights frozen, activations differentiated — the existing adaptive-renoise code already does this).
-With **NFE=3** (`update_sampling_timesteps=3`, locked) the per-frame sampler is a 3-step chain, so
-`∂W/∂φ` backprops through 3 sequential network passes per frame — ~3× the 1-step JVP cost. Cheap
-enough on the synthetic task; keep the *frame* window short and add gradient checkpointing only when
-scaling to video.
+**Cost.** `∂W/∂φ` differentiates through the frozen sampler w.r.t. the warm-start input (weights frozen,
+activations differentiated — existing code does this). At NFE=3 that is a 3-step chain, ~3× a 1-step JVP.
+Cheap on the synthetic task; add gradient checkpointing only when scaling to video.
 
 ---
 
-## 5. Failure modes and guards
+## 5. Failure modes and the selection criterion
 
 | risk | symptom | guard |
 |---|---|---|
-| **The Trap** (τ→0) | τ collapses to ~0, RMSE great, W1 terrible | architectural: only `g` (dist-match) trains φ; assert no FM loss in φ's graph |
-| **τ→1 everywhere** | policy discards warm-start | *correct* only on the unbiased walk / strong-conditioning bases (a sanity check, not a bug). On the **drift task it means missing the adaptive headroom** (early frames should keep τ high, late frames low) — diagnose via the τ-vs-time-in-episode curve, not just a histogram; compare W1 to the best *fixed* τ, not only τ=1 |
-| **mode collapse** (mode-seeking match) | low diversity, W1 degrades, per-state spread shrinks vs data | monitor per-state spread; if collapsing, add a small coverage term (GAN-style) or entropy bonus |
-| **fake model lag** | `g` points at stale `p_gen`; policy chases ghosts | K_fake:1 two-timescale; short on-policy FIFO; warm-start θ_fake from base |
-| **three-way nonstationarity** (θ_fake, φ, φ_ema) | oscillation / divergence | two-timescale LRs, φ_ema behavior policy, short rollouts early (curriculum) |
-| **early-rollout garbage** | diverging rollouts → bad signal | curriculum: teacher-forced→free, short→long horizons (φ randomly initialized — no optimum warm-start) |
-| **small-`t` tail** | near-data `1/t` makes `g` noisy / gradient-scale unstable | default guards: numerical floor on `t` + grad-norm clip. If it persists, restrict to mid-band `[t_lo,t_hi]` (§3.3 deferred lever) — never a per-sample loss normalization |
+| **warm-start collapse** (τ→0) | τ≈0, RMSE great, W1 terrible | architectural: only `g` trains φ; assert no FM loss in φ's graph |
+| **τ→1 everywhere** | policy discards the warm-start | *correct* on the unbiased walk / strongly-conditioned bases; on the **drift task it means missing the adaptive headroom** — diagnose via the τ-vs-time curve, and compare W1 to the best *fixed* τ, not just τ=1 |
+| **mode collapse** | low diversity, per-state spread shrinks vs data | monitor per-state spread; add a small coverage/entropy term if needed |
+| **fake-net lag** | `g` points at a stale field | `K_fake` two-timescale; short FIFO; warm-start `θ_fake` from base |
+| **nonstationarity** (θ_fake, φ, φ_ema) | oscillation / divergence | two-timescale LRs, EMA behavior policy, short early rollouts |
+| **small-`t` tail** | near-data `1/t` makes `g` noisy | numerical floor on `t` + grad-norm clip; if it persists, mid-band `[t_lo,t_hi]` (§3 deferred lever) |
 
-**Non-negotiable gate.** *Gate* = the accept / checkpoint-selection rule. Select and report **only**
-on **deployed free-running (closed-loop)** seeded RMSE + exact-OT W1 (p=1, `synthetic_task.py`). The
-velocity-matching loss value, one-step reconstruction probes, and the v5 self-consistency probe are
-**diagnostics only** — all shown to pass deployment-bad policies, so never select on them.
+**Non-negotiable selection criterion.** Select and report **only** on the deployed free-running
+(closed-loop) **RMSE + W1**. The matching-loss value, one-step reconstruction, and self-consistency
+probes are diagnostics only — all shown to pass deployment-bad policies, so never select on them.
 
 ---
 
-## 6. Regime requirements — when this can possibly help
+## 6. When this can help
 
-Two preconditions, both learned the hard way in prior runs:
+Two preconditions, both learned the hard way:
 
-1. **The warm-start must be load-bearing for temporal coherence.** If context conditioning alone
-   carries the temporal information (the current synthetic base), then `τ=1` (discard warm-start =
-   standard FM sampling) is distributionally optimal and the policy is pointless — *confirmed*: on
-   plain-FM and on a random-τ SF model, W1 is monotonically best at `τ=1`. The method only
-   pays off in **warm-start-reuse / iterative-refinement** regimes where each window seeds the next
-   and the model relies on it (weak/limited conditioning, long horizons, or SF co-adaptation that
-   makes the model exploit the warm-start).
+1. **The warm-start must matter.** If context conditioning alone carries the temporal information, then
+   τ=1 (discard the warm-start = standard FM sampling) is optimal and the policy is pointless — confirmed:
+   on plain-FM and random-τ SF models, W1 is best at τ=1. The method only pays off where each window
+   genuinely seeds the next (weak conditioning, long horizons, or self-forcing co-adaptation).
+2. **Uncertainty must be heterogeneous** for an *adaptive* τ to beat a constant. The unbiased walk is
+   homogeneous (trivial constant optimum). The **drift walk** supplies the structure in-repo: a latent
+   mode that is uncertain early (⇒ high τ) and revealed late (⇒ low τ). That early-high/late-low profile
+   is the in-repo analog of the heavier MoG latent-mode task.
 
-2. **Uncertainty must be heterogeneous** for an *adaptive* (vs constant) τ to win. The *unbiased*
-   (`drift_m=0`) walk is homogeneous → its fixed-τ optimum is a trivial low constant, no adaptive
-   headroom. The **hidden-mode drift walk** (`drift_m>0`, §1) supplies the missing structure *in this
-   repo*: a persistent latent mode `s` that is uncertain early (⇒ high optimal τ — re-infer rather
-   than trust a biased warm-start) and revealed late by the up/down frequency (⇒ low optimal τ —
-   refine). That early-high / late-low profile is a genuine adaptive τ-cliff — the same shape the
-   heavier **MoG task** (per-mode anisotropic noise, ~190× SSE swing) produces, now reachable without
-   the port.
-
-**Consequence for validation:** the unbiased walk stays a **correctness sanity check** (the policy
-should converge to `τ≈1` and *match* fixed-τ=1 W1 — collapse to low τ there means the
-objective/weighting is still wrong). The **drift walk is now the primary adaptive-headroom test**: the
-bar is to beat the best *fixed* τ on deployed, mode-posterior-weighted W1 with a τ policy that rides
-time-in-episode (high→low). The MoG port (dataset + analytic-mixture-posterior W1, built in the sibling
-flow-mog checkout — see project memory) remains available as a harder, 2-D confirmation but is no
-longer on the critical path.
+So the unbiased walk stays a **correctness check** (policy should converge to τ≈1 and match fixed-τ=1
+W1), and the **drift walk is the primary headroom test** (beat the best *fixed* τ on mode-posterior W1
+with a τ that rides time-in-episode).
 
 ---
 
-## 7. Experiment plan (staged, de-risked)
+## 7. Experiment plan
 
-**Current scope: the hidden-mode drift walk (`drift_m>0`), 4-frame / 5-overlapping-window geometry,
-single-window match (no cross-window BPTT).** The unbiased walk (`drift_m=0`) stays as the Stage-0
-sanity check; the drift walk is the first in-repo task with genuine adaptive headroom (§6), so the
-criterion is two-tiered: (i) on `drift_m=0`, recover `τ≈1` and match fixed-τ=1 W1 (machinery correct);
-(ii) on `drift_m>0`, the policy should ride time-in-episode (τ high early, low late) and **beat the
-best fixed τ** on deployed, mode-posterior-weighted W1.
+Scope: hidden-mode drift walk, 4-frame / 5-overlapping-window geometry, single-window match (no
+cross-window BPTT).
 
-- **Stage 0 — machinery + sanity (`drift_m=0`).** Run the full velocity-matching loop with the small
-  `τ_φ` policy (geometry: §1 — 5-token / 4-frame joint window, NFE=3, K_fake=5). Expect `τ→1`, W1 ≈
-  fixed-τ=1. *Gate: does the two-network velocity gradient recover the known distributional optimum?*
-  If not, fix weighting/fake-lag first.
-- **Stage 1 — adaptive win on the drift walk (`drift_m>0`).** Same machinery, drift dataset. *Gate:
-  beat the best fixed/banded τ on deployed mode-posterior-weighted W1 — the bar prior single-window
-  policies could not clear — with a τ(time-in-episode) that falls high→low.*
-- **Stage 2 — both bases.** Repeat for (a) plain-FM frozen base and (b) self-forcing frozen base
-  (per the user's "test both"). SF co-adaptation may sharpen or flatten the cliff.
-- **Stage 3 — MoG port (optional, harder confirmation).** 2-D latent-mode task; no longer on the
-  critical path now that the drift walk supplies headroom.
-- **Ablations:** the `t`-distribution — default is full-range `U[0,1]`; ablate a mid-band `[t_lo,t_hi]`
-  **only if** the small-`t` tail shows up (too-low `t_lo` → small-`t` blow-up; too-high `t_hi` →
-  near-noise dominates); single-window vs 2-step unroll; K_fake ratio; on-policy buffer length;
-  plain match vs +coverage(GAN) term; policy inputs (with/without base predictive spread).
+- **Stage 0 — machinery + sanity (`drift_m=0`).** Run the full loop; expect τ→1, W1 ≈ fixed-τ=1. *If
+  not, fix weighting / fake-lag first.*
+- **Stage 1 — adaptive win (`drift_m>0`).** Same machinery, drift dataset. *Goal: beat the best fixed τ
+  on deployed mode-posterior W1, with τ(time-in-episode) falling high→low.*
+- **Stage 2 — both bases.** Repeat for the plain-FM and self-forcing frozen bases.
+- **Stage 3 — MoG port (optional).** 2-D latent-mode task; harder confirmation, off the critical path now.
+- **Ablations:** `t`-range (full vs mid-band, only if the small-`t` tail shows); single-window vs
+  `K_bptt=2`; `K_fake` ratio; buffer length; plain match vs +coverage term; policy inputs.
 
 ---
 
-## 8. Code integration map (what to add / reuse)
+## 8. Code map
 
-Reuse (exists today):
-- Renoise primitive `q_sample`, simple linear path — `models/flow.py:93-99, 168-174`.
-- `pred_x0` / `pred_v` / `pred_noise` accessors for building the difference — `models/flow.py:110-136`.
-- Frozen-base + trainable-copy plumbing — `flow_base_adaptor.py:23-66` (`_create_model_copy`), clone it for θ_fake.
-- Per-token τ conditioning via `t2`/`second_k_emb`/`k_embed_2` — `transformer.py:44-61`, `flow.py:110-119`.
-- On-policy rollout template (sampler under controlled grad, then grad-carrying loss) —
-  `sf_flow_base.py:66-129`.
-- One-step renoise warm-start inference — `flow_base_adaptor.py:311-395`.
-- Policy net — `models/renoise_policy.py` (from `feat/dmd-renoise-policy`).
-- Deployment metrics — seeded closed-loop RMSE + exact-OT W1 (p=1) in `synthetic_task.py`.
+**Reuse (exists today):**
+- Renoise primitive + path — `models/flow.py:93-99, 168-174`; `pred_x0/v/noise` — `:110-136`.
+- Frozen-base + trainable-copy plumbing (`_create_model_copy`) — `flow_base_adaptor.py:23-66` (clone for `θ_fake`).
+- Per-token τ conditioning (`t2`/`second_k_emb`) — `transformer.py:44-61`, `flow.py:110-119`.
+- On-policy rollout under controlled grad — `sf_flow_base.py:66-129`; one-step renoise inference — `flow_base_adaptor.py:311-395`.
+- Policy net — `models/renoise_policy.py`. Metrics (closed-loop RMSE + W1) — `synthetic_task.py`.
 
-Add (new):
-- `algorithms/base_model/dmd_renoise_flow_base.py` (filename keeps the branch tag): holds θ_real
-  (frozen), θ_fake (online), φ (policy); the three-part training loop (§4); the velocity-matching `g`
-  (velocity-space, unit-weighted, full-range `t`, §3.2–3.3); the on-policy buffer + two-timescale schedule.
-- Pipeline `algorithms/pipelines/dmd_renoise_flow_synthetic.py` + config
-  `configurations/algorithm/dmd_renoise_flow_synthetic.yaml` (`update_sampling_timesteps: 3` (NFE, locked),
-  `t` floor `epsilon` + optional `[t_lo,t_hi]` band off by default, K_fake, buffer len, ema decay, unroll
-  steps, grad-clip norm); register in `experiments/exp_synthetic.py`.
-- **Differentiable renoise generation**: a rollout that runs the frozen sampler with weights frozen
-  but grad flowing through the warm-start input + τ (params `requires_grad_(False)`, no `no_grad`
-  around the warm-start), modeled on the prior adaptive-renoise sampler.
-
-Per the standing directive, transformer-backbone models run with AdaLN; but the `t2`/`second_k_emb`
-second-time-embedding path is required here for per-token τ — keep that conditioning enabled (the
-AdaLN transformer was already extended to support `k_embed_2`/`t2`).
+**Add (new):**
+- `algorithms/base_model/dmd_renoise_flow_base.py` — holds `θ_real`/`θ_fake`/`φ`, the three-part loop
+  (§4), the matching gradient `g` (velocity-space, unit weight, full-range `t`), the buffer + two-timescale schedule.
+- Pipeline + config `configurations/algorithm/dmd_renoise_flow_synthetic.yaml`
+  (`update_sampling_timesteps: 3`, `t` floor + optional band off by default, `K_fake`, buffer len, ema
+  decay, `K_bptt`, grad-clip).
+- **Differentiable renoise rollout:** frozen sampler with grad flowing through the warm-start + τ (params
+  `requires_grad_(False)`, no `no_grad` around the warm-start).
 
 ---
 
-## 9. Open questions / risks to watch
+## 9. Open questions
 
-- **Does the on-policy single-window joint (4-frame) match actually pin the trajectory**, or is a
-  multi-window unroll (`K_bptt>1`) needed in practice? (Theory says single-window-on-policy suffices at
-  the fixed point; empirics on the drift cliff will tell.)
-- **Mode-seeking.** The velocity-matching fixed point is mode-seeking; if that hurts the
-  coherence/diversity goal, a small coverage / GAN term may be needed — but that reintroduces a second
-  moving part.
-- **Teacher trust off-manifold** during early training — with full-range `t`, do the small-`t`
-  (near-data) queries on still-garbage early rollouts stay in-region, or is this the failure mode that
-  forces an annealed `t_lo` floor (the §3.3 deferred lever) early in training?
-- **Co-adaptation (unfreezing the base) as a Stage-3 extension** — the genuinely new lever
-  (model learns to fix exactly the errors that survive renoise at the policy's τ); measurably
-  reshaped the τ-landscape before but did not by itself rescue the (then single-window) objective.
+- Does the on-policy single-window 4-frame match actually pin the trajectory, or is `K_bptt>1` needed in
+  practice? (Theory says single-window-on-policy suffices at the fixed point; the drift task will tell.)
+- Mode-seeking: the matching fixed point is mode-seeking — if it hurts diversity, a small coverage/GAN
+  term may be needed (a second moving part).
+- Teacher trust off-manifold early: with full-range `t`, do near-data queries on still-garbage early
+  rollouts stay in-region, or is an annealed `t_lo` needed early?
+- Co-adaptation (unfreezing the base) as a later lever — reshaped the τ-landscape before but did not by
+  itself rescue the (then single-window) objective.
 
 ---
 
-## Relation to existing methods
-
-The drift-difference update of §3.2 is the **velocity-field form of distribution-matching distillation**
-(DMD / score-distillation / Diff-Instruct): those methods derive the *same* per-sample gradient $g$ as a
-reverse-KL gradient via the score (using $v_{\text{gen}}-v_{\text{data}}=-\tfrac{t}{1-t}(s_{\text{gen}}-s_{\text{data}})$,
-exact for any data — §3.1). We do **not** rely on that derivation — the velocity-field characterization
-(§3.0) justifies the method directly. The equivalence is noted only so the accumulated stabilization
-know-how (two-timescale fake-model updates, gradient-scale control, optional GAN coverage term)
-transfers for free — with one deliberate departure: we keep the **unit-weighted velocity** objective and
-skip DMD's per-sample gradient normalization, using global grad-norm clipping only if needed (§3.3), so
-no heuristic $t$-weight slips back in. The branch keeps the historical `dmd` tag in its name; the method
-here is velocity-field matching.
+*The branch keeps the historical `dmd` tag in its name; the method here is velocity-field matching.*
