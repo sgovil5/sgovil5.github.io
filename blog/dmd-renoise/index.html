@@ -101,8 +101,8 @@ uninformative — the mode shows only in the up/down <strong>frequency</strong> 
 <strong>heterogeneous</strong>: early on the mode is uncertain (wide spread ⇒ high optimal τ — re-infer, don&#39;t trust a
 biased warm-start); once the frequency reveals <code>s</code>, it is near-certain (⇒ low optimal τ — refine). The
 W1 target is correspondingly <strong>mode-posterior-weighted</strong>: the analytic future re-weights the <code>2^H</code> sign
-branches by the Bayes posterior over <code>s</code> given the observed history (<code>w1_distance_traj</code>). <code>drift_m</code> is
-the headroom knob (larger ⇒ sharper mode); <code>drift_m=0</code> recovers the unbiased walk, where the optimal τ
+branches by the Bayes posterior over <code>s</code> given the observed history (<code>w1_distance_traj</code>). <code>drift_m</code> sets
+the mode strength (larger ⇒ sharper mode); <code>drift_m=0</code> recovers the unbiased walk, where the optimal τ
 is a trivial constant and no policy can help.</p>
 <p><strong>Geometry</strong> (from configs). 1-D token, 10-frame episode, <code>context_frames=1</code>, <code>open_loop_horizon=1</code>.
 With <code>prediction_horizon=4</code>, each window predicts 4 frames from one renoised context token, and the
@@ -111,7 +111,7 @@ slide-by-1 rollout yields <strong>5 overlapping windows</strong> per episode. Th
 is the deployment cadence (the policy renoises every frame), so training and the selection rollout see
 the identical window stream. Per-frame sampler <strong>NFE=3</strong>.</p>
 <p><strong>Policy.</strong> <code>τ_φ</code> is a small net (~20k params) reading the renoised warm-start <code>ŷ</code>, the current context
-token <code>c_last</code>, and <code>step_norm</code> = <strong>time-in-episode</strong>. Time-in-episode is load-bearing on the drift task
+token <code>c_last</code>, and <code>step_norm</code> = <strong>time-in-episode</strong>. Time-in-episode matters on the drift task
 (the optimum is τ-high-early / τ-low-late), so the policy must know where in the episode it sits. On the
 unbiased walk this input is inert and the policy can ignore it.</p>
 <hr>
@@ -309,7 +309,7 @@ mode that is uncertain early (⇒ high τ) and revealed late (⇒ low τ). That 
 is the in-repo analog of the heavier MoG latent-mode task.</li>
 </ol>
 <p>So the unbiased walk stays a <strong>correctness check</strong> (policy should converge to τ≈1 and match fixed-τ=1
-W1), and the <strong>drift walk is the primary headroom test</strong> (beat the best <em>fixed</em> τ on mode-posterior W1
+W1), and the <strong>drift walk is the primary adaptive-τ test</strong> (beat the best <em>fixed</em> τ on mode-posterior W1
 with a τ that rides time-in-episode).</p>
 <hr>
 <h2>7. Experiment plan</h2>

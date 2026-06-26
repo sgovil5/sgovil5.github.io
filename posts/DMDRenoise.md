@@ -51,8 +51,8 @@ uninformative — the mode shows only in the up/down **frequency** over several 
 **heterogeneous**: early on the mode is uncertain (wide spread ⇒ high optimal τ — re-infer, don't trust a
 biased warm-start); once the frequency reveals `s`, it is near-certain (⇒ low optimal τ — refine). The
 W1 target is correspondingly **mode-posterior-weighted**: the analytic future re-weights the `2^H` sign
-branches by the Bayes posterior over `s` given the observed history (`w1_distance_traj`). `drift_m` is
-the headroom knob (larger ⇒ sharper mode); `drift_m=0` recovers the unbiased walk, where the optimal τ
+branches by the Bayes posterior over `s` given the observed history (`w1_distance_traj`). `drift_m` sets
+the mode strength (larger ⇒ sharper mode); `drift_m=0` recovers the unbiased walk, where the optimal τ
 is a trivial constant and no policy can help.
 
 **Geometry** (from configs). 1-D token, 10-frame episode, `context_frames=1`, `open_loop_horizon=1`.
@@ -63,7 +63,7 @@ is the deployment cadence (the policy renoises every frame), so training and the
 the identical window stream. Per-frame sampler **NFE=3**.
 
 **Policy.** `τ_φ` is a small net (~20k params) reading the renoised warm-start `ŷ`, the current context
-token `c_last`, and `step_norm` = **time-in-episode**. Time-in-episode is load-bearing on the drift task
+token `c_last`, and `step_norm` = **time-in-episode**. Time-in-episode matters on the drift task
 (the optimum is τ-high-early / τ-low-late), so the policy must know where in the episode it sits. On the
 unbiased walk this input is inert and the policy can ignore it.
 
@@ -223,7 +223,7 @@ Two preconditions, both learned the hard way:
    is the in-repo analog of the heavier MoG latent-mode task.
 
 So the unbiased walk stays a **correctness check** (policy should converge to τ≈1 and match fixed-τ=1
-W1), and the **drift walk is the primary headroom test** (beat the best *fixed* τ on mode-posterior W1
+W1), and the **drift walk is the primary adaptive-τ test** (beat the best *fixed* τ on mode-posterior W1
 with a τ that rides time-in-episode).
 
 ---
