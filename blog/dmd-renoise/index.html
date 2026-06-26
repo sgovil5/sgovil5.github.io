@@ -218,7 +218,7 @@ restrict to a mid-band <code>t ~ U[t_lo, t_hi]</code> (e.g. <code>[0.1,0.9]</cod
 is trained, <code>inter_time: uniform</code>), so <code>v_real(W_t,t)</code> is a valid joint-window field. The base is only
 trustworthy in-distribution; evaluating at noised points with <code>t</code> bounded from 0 keeps queries in-region.</li>
 <li><strong>Relation to DMD / Diff-Instruct.</strong> Substituting the score identity
-<code>s_real − s_fake = −(t/(1−t))(v_real − v_fake)</code> shows the same <code>g</code> is the reverse-KL gradient under
+<code>s_real − s_fake = −((1−t)/t)(v_real − v_fake)</code> shows the same <code>g</code> is the reverse-KL gradient under
 weight <code>w(t)=t/(1−t)</code>. So <strong>velocity-space, unit weight = reverse-KL, weight <code>t/(1−t)</code></strong> — exactly the
 DMD gradient, obtained here without invoking a score or a KL. We keep the unit-weighted velocity form
 and skip DMD&#39;s per-sample normalization (which would smuggle a <code>t</code>-weight back in).</li>

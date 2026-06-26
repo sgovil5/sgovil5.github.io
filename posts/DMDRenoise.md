@@ -152,7 +152,7 @@ distributions." This is the architectural invariant of §4–5.
   is trained, `inter_time: uniform`), so `v_real(W_t,t)` is a valid joint-window field. The base is only
   trustworthy in-distribution; evaluating at noised points with `t` bounded from 0 keeps queries in-region.
 - **Relation to DMD / Diff-Instruct.** Substituting the score identity
-  `s_real − s_fake = −(t/(1−t))(v_real − v_fake)` shows the same `g` is the reverse-KL gradient under
+  `s_real − s_fake = −((1−t)/t)(v_real − v_fake)` shows the same `g` is the reverse-KL gradient under
   weight `w(t)=t/(1−t)`. So **velocity-space, unit weight = reverse-KL, weight `t/(1−t)`** — exactly the
   DMD gradient, obtained here without invoking a score or a KL. We keep the unit-weighted velocity form
   and skip DMD's per-sample normalization (which would smuggle a `t`-weight back in).
