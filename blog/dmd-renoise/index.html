@@ -62,14 +62,14 @@
 <p>Roll out an autoregressive sequence under a <strong>frozen</strong> flow model. Between windows the model
 <strong>renoises</strong> its own previous prediction to a learned per-token level <strong>τ</strong>, then re-denoises. A small
 policy <code>τ_φ</code> picks τ. We train it by <strong>velocity-field matching</strong>: fit an online &quot;fake&quot; copy of the flow
-model to the rollout, then push τ so the frozen base (the <em>real</em> velocity field) and the fake copy
+model to the rollout, then push τ so a frozen <strong>plain-FM</strong> base trained on data — the <em>real</em> (data) velocity field — and the fake copy
 agree. Flow matching gives the key fact — <em>equal velocity fields ⟺ equal distributions</em> — so this is
 exact distribution matching, needing no score, no KL, and no assumption that the data is Gaussian.</p>
 <p><strong>Why this objective.</strong> Every prior renoise-policy attempt used a single-window loss that is
 mis-aligned with deployment: point-MSE turns the sampler into a mean-seeking point predictor;
 energy-score over-diversifies. A proper distribution-matching objective is the missing piece, and no
 true two-network velocity match has been run in this repo before.</p>
-<p><strong>Four choices that make it work:</strong></p>
+<p><strong>Five choices that make it work:</strong></p>
 <ol>
 <li><strong>Match whole windows, on-policy</strong> — the renoised context tokens <em>plus</em> the freshly generated
 continuation, jointly — so the gradient sees compounding error, which a single-frame conditional loss cannot.</li>
@@ -78,6 +78,11 @@ continuation, jointly — so the gradient sees compounding error, which a single
 rewards making the warm-start trivially predictable and collapses τ→0 (the <em>warm-start collapse</em>).</li>
 <li><strong>Select only on deployed metrics</strong> (closed-loop RMSE + W1), on a task with real adaptive headroom
 (the hidden-mode drift walk, §1).</li>
+<li><strong>The target field <code>v_real</code> is always a plain (regular) FM base trained on data.</strong> It must be the
+genuine data velocity field <code>E_data[ε−d|x_t]</code>; a self-forcing base supplies its <em>own</em> rollout field,
+not <code>v_data</code>, and using it as the target collapses the objective to &quot;reproduce the base&quot; (the trivial
+τ→1). The deployed generator may still be self-forcing — only the <em>target</em> is fixed to plain-FM (§3
+Step 3, §4).</li>
 </ol>
 <hr>
 <h2>1. Setup and task</h2>
@@ -183,8 +188,13 @@ The expectation is under the rollout <code>p^gen_t</code> because that is all we
 exactly what Step 1 requires. Write <code>v_real = v^data</code>, <code>v_fake = v^gen</code>.</p>
 <p><strong>Step 3 — both fields are obtainable.</strong></p>
 <ul>
-<li><code>v_real</code> is <strong>free</strong>: the frozen base was trained by FM regression on data, whose pointwise minimizer
-is <code>E_data[ε−d | x_t] = v_real</code>. The base <em>is</em> the real field.</li>
+<li><code>v_real</code> is <strong>free — but only from a plain (regular) flow-matching base trained on data.</strong> Plain-FM
+regression&#39;s pointwise minimizer is <code>E_data[ε−d | x_t] = v_real</code>, so that base <em>is</em> the data field. A
+<strong>self-forcing base does not qualify as <code>v_real</code></strong>: it regresses on its <em>own</em> renoise rollouts, so its
+field is the SF rollout fixed point, not <code>v_data</code>. Using an SF base as the target makes the objective
+&quot;reproduce the SF base,&quot; whose self-match is the trivial τ→1 (see <code>reports/dmd_renoise/REPORT.md</code> §5).
+The matching target is therefore <em>always</em> a plain-FM base — <strong>even when the deployed generator is
+self-forcing</strong> (§4).</li>
 <li><code>v_fake</code> has no closed form, so <strong>estimate it online</strong>: fit a second FM net <code>θ_fake</code> to the current
 rollout windows with the same regression; its minimizer is <code>E_gen[ε−d | x_t] = v_fake</code>. This is why the
 fake net tracks the <em>rollout&#39;s</em> field and must be kept fresh as τ moves (two-timescale).</li>
@@ -225,18 +235,24 @@ and skip DMD&#39;s per-sample normalization (which would smuggle a <code>t</code
 </ul>
 <hr>
 <h2>4. The algorithm</h2>
-<p><strong>Parameters:</strong> <code>θ_real</code> (frozen base = real field), <code>θ_fake</code> (online copy, the rollout&#39;s field), <code>φ</code>
-(policy, randomly initialized — no optimum warm-start; the curriculum carries early rollouts). Optional:
-an EMA behavior policy and a short FIFO buffer of recent on-policy windows.</p>
+<p><strong>Parameters:</strong> <code>θ_real</code> (frozen <strong>plain-FM</strong> base trained on data = the real/data field <code>v_real</code>;
+<strong>target only, never rolled out</strong>), <code>θ_gen</code> (the frozen base that is actually <strong>deployed / rolled out</strong> —
+plain-FM <em>or</em> self-forcing; the self-forcing generator is the case with real low-τ headroom), <code>θ_fake</code>
+(online copy fit to the rollout = <code>v_fake</code>), <code>φ</code> (policy, randomly initialized — no optimum warm-start;
+the curriculum carries early rollouts). When the generator is plain-FM, <code>θ_gen</code> and <code>θ_real</code> are the
+<strong>same</strong> checkpoint; when it is self-forcing they <strong>differ</strong> — this <em>cross</em> configuration (SF generator +
+plain-FM target) is the corrected default, the only one with both real low-τ headroom <em>and</em> a
+non-tautological fixed point. Optional: an EMA behavior policy and a short FIFO buffer of recent
+on-policy windows.</p>
 <p>Repeat:</p>
 <ol>
-<li><strong>Rollout (on-policy).</strong> Free-run the AR sequence with <code>θ_real</code> (eval, but grad enabled through the
+<li><strong>Rollout (on-policy).</strong> Free-run the AR sequence with <code>θ_gen</code> (eval, but grad enabled through the
 warm-start input) and the behavior policy. NFE=3 per frame. Collect each window
 <code>W = [renoised context ; generated continuation]</code>; τ enters <code>W</code> through both the renoise and the <code>t2</code>
 conditioning (keep both differentiable).</li>
 <li><strong>Update the fake net.</strong> <code>K_fake=5</code> steps of the standard FM/<code>pred_x0</code> loss on <strong>stop-grad</strong> rollout
 windows (shared-<code>t</code>), drawn from the on-policy buffer. Two-timescale: fake net stays ahead of φ.</li>
-<li><strong>Update the policy.</strong> For each window: sample <code>t ~ U[ε,1−ε]</code>, noise the window <code>W_t</code>, query both nets
+<li><strong>Update the policy.</strong> For each window: sample <code>t ~ U[ε,1−ε]</code>, noise the window <code>W_t</code>, query <code>θ_real</code> (→ <code>v_real</code>) and <code>θ_fake</code> (→ <code>v_fake</code>)
 (weights stop-gradded), convert to velocities, form <code>g = v_real − v_fake</code>, and backprop
 <code>g</code> through <code>W_t → W → renoise(τ_φ) → φ</code>; Adam step. <strong>Invariant: only <code>g</code> trains φ.</strong></li>
 <li><strong>Periodically evaluate the selection criterion</strong> (free-running RMSE + W1) and checkpoint the best.</li>
@@ -269,7 +285,7 @@ Cheap on the synthetic task; add gradient checkpointing only when scaling to vid
 <tr>
 <td><strong>τ→1 everywhere</strong></td>
 <td>policy discards the warm-start</td>
-<td><em>correct</em> on the unbiased walk / strongly-conditioned bases; on the <strong>drift task it means missing the adaptive headroom</strong> — diagnose via the τ-vs-time curve, and compare W1 to the best <em>fixed</em> τ, not just τ=1</td>
+<td>the <em>structural</em> τ→1 trap — using the SF base as its <strong>own</strong> target, whose self-match is τ=1 — is eliminated by mandating a <strong>plain-FM <code>v_real</code></strong> (§3 Step 3). Residual τ→1 is <em>correct</em> on the unbiased walk / strongly-conditioned bases; on the <strong>drift task it means missing the adaptive headroom</strong> — diagnose via the τ-vs-time curve, and compare W1 to the best <em>fixed</em> τ, not just τ=1</td>
 </tr>
 <tr>
 <td><strong>mode collapse</strong></td>
@@ -302,7 +318,9 @@ probes are diagnostics only — all shown to pass deployment-bad policies, so ne
 <li><strong>The warm-start must matter.</strong> If context conditioning alone carries the temporal information, then
 τ=1 (discard the warm-start = standard FM sampling) is optimal and the policy is pointless — confirmed:
 on plain-FM and random-τ SF models, W1 is best at τ=1. The method only pays off where each window
-genuinely seeds the next (weak conditioning, long horizons, or self-forcing co-adaptation).</li>
+genuinely seeds the next (weak conditioning, long horizons, or self-forcing co-adaptation). This is a
+property of the deployed <strong>generator</strong> <code>θ_gen</code>; the <em>target</em> <code>v_real</code> stays a plain-FM data base
+regardless (§3 Step 3, §4).</li>
 <li><strong>Uncertainty must be heterogeneous</strong> for an <em>adaptive</em> τ to beat a constant. The unbiased walk is
 homogeneous (trivial constant optimum). The <strong>drift walk</strong> supplies the structure in-repo: a latent
 mode that is uncertain early (⇒ high τ) and revealed late (⇒ low τ). That early-high/late-low profile
@@ -320,7 +338,11 @@ cross-window BPTT).</p>
 not, fix weighting / fake-lag first.</em></li>
 <li><strong>Stage 1 — adaptive win (<code>drift_m&gt;0</code>).</strong> Same machinery, drift dataset. <em>Goal: beat the best fixed τ
 on deployed mode-posterior W1, with τ(time-in-episode) falling high→low.</em></li>
-<li><strong>Stage 2 — both bases.</strong> Repeat for the plain-FM and self-forcing frozen bases.</li>
+<li><strong>Stage 2 — generator variants (target fixed to plain-FM).</strong> Repeat with the deployed <em>generator</em>
+<code>θ_gen</code> ∈ {plain-FM, self-forcing}; the target <code>v_real</code> (<code>θ_real</code>) is <strong>always the plain-FM data base</strong>
+(§3 Step 3). The <strong>cross run</strong> — SF generator + plain-FM target — is the key test: the only setting
+with both real low-τ headroom <em>and</em> a non-tautological fixed point (the old SF-as-its-own-target run had
+neither and is dropped).</li>
 <li><strong>Stage 3 — MoG port (optional).</strong> 2-D latent-mode task; harder confirmation, off the critical path now.</li>
 <li><strong>Ablations:</strong> <code>t</code>-range (full vs mid-band, only if the small-<code>t</code> tail shows); single-window vs
 <code>K_bptt=2</code>; <code>K_fake</code> ratio; buffer length; plain match vs +coverage term; policy inputs.</li>
@@ -337,8 +359,12 @@ on deployed mode-posterior W1, with τ(time-in-episode) falling high→low.</em>
 </ul>
 <p><strong>Add (new):</strong></p>
 <ul>
-<li><code>algorithms/base_model/dmd_renoise_flow_base.py</code> — holds <code>θ_real</code>/<code>θ_fake</code>/<code>φ</code>, the three-part loop
-(§4), the matching gradient <code>g</code> (velocity-space, unit weight, full-range <code>t</code>), the buffer + two-timescale schedule.</li>
+<li><code>algorithms/base_model/dmd_renoise_flow_base.py</code> — holds <code>θ_real</code> (plain-FM target = <code>v_real</code>), <code>θ_gen</code>
+(deployed generator, possibly a <strong>separate self-forcing checkpoint</strong>), <code>θ_fake</code>, and <code>φ</code>; the three-part
+loop (§4), the matching gradient <code>g</code> (velocity-space, unit weight, full-range <code>t</code>), the buffer +
+two-timescale schedule. <strong>Note:</strong> the current code uses a <em>single</em> frozen <code>flow_model</code> for both the
+rollout and <code>v_real</code> (<code>dmd_renoise_flow_base.py:123, 249</code>); the corrected design loads a separate
+plain-FM checkpoint as <code>θ_real</code> whenever <code>θ_gen</code> is self-forcing.</li>
 <li>Pipeline + config <code>configurations/algorithm/dmd_renoise_flow_synthetic.yaml</code>
 (<code>update_sampling_timesteps: 3</code>, <code>t</code> floor + optional band off by default, <code>K_fake</code>, buffer len, ema
 decay, <code>K_bptt</code>, grad-clip).</li>
@@ -353,7 +379,9 @@ practice? (Theory says single-window-on-policy suffices at the fixed point; the 
 <li>Mode-seeking: the matching fixed point is mode-seeking — if it hurts diversity, a small coverage/GAN
 term may be needed (a second moving part).</li>
 <li>Teacher trust off-manifold early: with full-range <code>t</code>, do near-data queries on still-garbage early
-rollouts stay in-region, or is an annealed <code>t_lo</code> needed early?</li>
+rollouts stay in-region, or is an annealed <code>t_lo</code> needed early? <strong>Sharper in the cross config:</strong> the
+plain-FM <code>θ_real</code> was trained only on <em>ground-truth</em> context, so querying it on the SF generator&#39;s
+imperfect rollout context is off-manifold — keep <code>t</code> bounded and rollouts decent, or anneal <code>t_lo</code>.</li>
 <li>Co-adaptation (unfreezing the base) as a later lever — reshaped the τ-landscape before but did not by
 itself rescue the (then single-window) objective.</li>
 </ul>
