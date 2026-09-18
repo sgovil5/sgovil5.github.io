@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <title>Shitij Govil</title>
   <meta name="author" content="Shitij Govil">
+  <meta name="description" content="Shitij Govil is a Georgia Tech researcher working on robot learning, world-action models, and efficient machine learning for scientific problems.">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="shortcut icon" href="images/favicon/favicon.ico" type="image/x-icon">
   <link rel="stylesheet" href="stylesheet.css">
@@ -17,7 +18,7 @@
         <a href="#research" class="fancy-link">research</a>
         <a href="#projects" class="fancy-link">projects</a>
         <a href="blog.html" class="fancy-link">blog</a>
-        <a href="Shitij_Govil_resume.pdf" class="fancy-link">resume</a>
+        <a href="Shitij_Govil_CV.pdf" class="fancy-link">cv</a>
       </nav>
     </header>
 
@@ -33,6 +34,14 @@
                   <path fill-rule="evenodd" clip-rule="evenodd" d="M3 6.5C3 5.67157 3.67157 5 4.5 5H19.5C20.3284 5 21 5.67157 21 6.5V17.5C21 18.3284 20.3284 19 19.5 19H4.5C3.67157 19 3 18.3284 3 17.5V6.5ZM5.31641 7L11.2929 12.9765C11.6834 13.367 12.3166 13.367 12.7071 12.9765L18.6836 7H5.31641ZM19 8.12988V17H5V8.12988L10.5858 13.7157C11.7574 14.8873 13.6569 14.8873 14.8284 13.7157L19 8.12988Z" fill="currentColor"/>
                 </svg>
                 sgovil9@gatech.edu
+              </a>
+            </div>
+            <div class="contact-item">
+              <a href="https://scholar.google.com/citations?user=qNIedbEAAAAJ&amp;hl=en" class="contact-button fancy-link" target="_blank" rel="noreferrer">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                  <path d="M12 3 2 8l10 5 8-4v6h2V8L12 3Zm-6 8.2V16c0 1.7 2.7 3 6 3s6-1.3 6-3v-4.8l-6 3-6-3Z" fill="currentColor"/>
+                </svg>
+                google scholar
               </a>
             </div>
             <div class="contact-item">
@@ -66,13 +75,15 @@
           <section id="about">
             <h2>about</h2>
             <p>
-              Hi! I'm a third year Computer Science undergraduate student at Georgia Tech, where I've been fortunate to work with Prof.
-              <a href="https://sites.google.com/view/panli-purdue/home" target="_blank" rel="noreferrer">Pan Li</a>
+              Hi! I'm a final-year Computer Science undergraduate at Georgia Tech, where I work with Prof.
+              <a href="https://animesh.garg.tech/" target="_blank" rel="noreferrer">Animesh Garg</a>
               and Prof.
-              <a href="https://animesh.garg.tech/" target="_blank" rel="noreferrer">Animesh Garg</a>.
-              My recent works spans robotics (learning from unlabeled videos) and ML for science (currently particle physics).
+              <a href="https://sites.google.com/view/panli-purdue/home" target="_blank" rel="noreferrer">Pan Li</a>.
+              My research spans robot learning from unlabeled human video and efficient machine learning for scientific problems, especially particle tracking.
             </p>
-            <p>I will be applying for PhDs for Fall 2027. My research goal is to create sample-efficient models grounded in real-world dynamics. I've recently become interested in robotics, and I have a few work-in-progress projects in this domain.</p>
+            <p>
+              My goal is to build sample-efficient models grounded in real-world dynamics. I am currently developing world-action models that use 3D scene flow to transfer motion knowledge from human video to robot manipulation, as well as end-to-end point transformers for charged-particle reconstruction. I will be applying to PhD programs for Fall 2027.
+            </p>
             <p>Outside of research, I love staying active and playing sports. I boulder and lift a lot, and occasionally play pickup ultimate frisbee and volleyball. I also listen to a lot of music (mostly techno) and DJ. Sometimes I also <a href="images/urbex.png" target="_blank" rel="noreferrer">urbex</a>.</p>
             <p>Accepting <a href="images/opp.png" target="_blank" rel="noreferrer">opp applications</a>.</p>
           </section>
@@ -83,22 +94,75 @@
         <h2>research</h2>
         <div class="research-item">
           <div class="paper-image-container">
-            <img src="images/HEPTv2 poster.png" alt="Locality-Sensitive Hashing-Based Efficient Point Transformer for Charged Particle Reconstruction thumbnail">
+            <img src="images/flomo-results.webp" alt="FloMo real-robot results showing that predicting 3D motion outperforms video-prediction alternatives">
           </div>
           <div class="paper-details">
             <p class="paper-title">
-              <a href="https://arxiv.org/pdf/2510.07594" target="_blank" rel="noreferrer">Locality-Sensitive Hashing-Based Efficient Point Transformer for Charged Particle Reconstruction</a>
+              <a href="https://flomo-wam.github.io/" target="_blank" rel="noreferrer">FloMo: 3D Scene Flow as a World-Action Model Intermediate for Learning from Human Video</a>
+            </p>
+            <p class="paper-publication">Submitted to ICRA</p>
+            <p class="paper-links">
+              <a href="https://flomo-wam.github.io/" target="_blank" rel="noreferrer">[project page]</a>
+            </p>
+            <p class="paper-authors">
+              <b>Shitij Govil*</b>, James A. Collins*, Naman Patel*, Ayush Agarwal*, Animesh Garg
+            </p>
+            <p>
+              A 5B world-action model that predicts 3D scene flow and robot actions, using action-free human video to improve sample efficiency and generalization to unseen objects, motions, and tasks.
+            </p>
+            <p class="paper-note">* Equal contribution</p>
+          </div>
+        </div>
+
+        <div class="research-item">
+          <div class="paper-image-container">
+            <img src="images/HEPTv2 poster.png" alt="HEPTv2 end-to-end charged-particle tracking pipeline">
+          </div>
+          <div class="paper-details">
+            <p class="paper-title">
+              <a href="https://arxiv.org/abs/2606.20437" target="_blank" rel="noreferrer">HEPTv2: End-to-End Efficient Point Transformer for Charged Particle Reconstruction</a>
+            </p>
+            <p class="paper-publication">Under review at PRX Intelligence, 2026</p>
+            <p class="paper-links">
+              <a href="https://arxiv.org/abs/2606.20437" target="_blank" rel="noreferrer">[paper]</a>
+            </p>
+            <p class="paper-authors">
+              Siqi Miao*, <b>Shitij Govil*</b>, Jack P. Rodgers, Mia Liu, Javier Duarte, Shih-Chieh Hsu, Yuan-Tang Chou, Pan Li
+            </p>
+            <p>
+              An end-to-end point transformer that reconstructs particle tracks without graph construction, clustering, or filtering, reaching 98.6% tracking efficiency with approximately 15 ms inference per event.
+            </p>
+            <p class="paper-note">* Equal contribution</p>
+          </div>
+        </div>
+
+        <div class="research-item research-item-text">
+          <div class="paper-details">
+            <p class="paper-title">
+              <a href="https://doi.org/10.1117/12.3094951" target="_blank" rel="noreferrer">Improving Semantic Coverage in AI Test and Evaluation through Generative Augmentation</a>
+            </p>
+            <p class="paper-publication">Assurance and Security for AI-enabled Systems 2026, Proc. SPIE 14046</p>
+            <p class="paper-links">
+              <a href="https://doi.org/10.1117/12.3094951" target="_blank" rel="noreferrer">[paper]</a>
+            </p>
+            <p class="paper-authors">
+              Connor Hashemi, Bharadwaj Ravichandran, Connor Anderson, <b>Shitij Govil</b>, Brandon RichardWebster, Brian Hu, Keith Fieldhouse
+            </p>
+          </div>
+        </div>
+
+        <div class="research-item research-item-text">
+          <div class="paper-details">
+            <p class="paper-title">
+              <a href="https://arxiv.org/abs/2510.07594" target="_blank" rel="noreferrer">Locality-Sensitive Hashing-Based Efficient Point Transformer for Charged Particle Reconstruction</a>
             </p>
             <p class="paper-publication">Machine Learning and the Physical Sciences Workshop, NeurIPS 2025</p>
             <p class="paper-links">
-              <a href="https://arxiv.org/pdf/2510.07594" target="_blank" rel="noreferrer">[paper]</a>
-              <a href="https://neurips.cc/media/PosterPDFs/NeurIPS%202025/123042.png?t=1766858885.0926204" target="_blank" rel="noreferrer">[poster]</a>
+              <a href="https://arxiv.org/abs/2510.07594" target="_blank" rel="noreferrer">[paper]</a>
+              <a href="https://neurips.cc/media/PosterPDFs/NeurIPS%202025/123042.png" target="_blank" rel="noreferrer">[poster]</a>
             </p>
             <p class="paper-authors">
-              <b>Shitij Govil</b>, Jack P Rodgers, Yuan-Tang Chou, Siqi Miao, Amit Saha, Advaith Anand, Kilian Lieret, Gage DeZoort, Mia Liu, Javier Duarte, Pan Li, Shih-Chieh Hsu
-            </p>
-            <p>
-              Unified evaluation of HEPT and GNN baselines, and HEPTv2: a lightweight decoder that removes clustering and enables fast end-to-end inference for charged particle tracking.
+              <b>Shitij Govil</b>, Jack P. Rodgers, Yuan-Tang Chou, Siqi Miao, Amit Saha, Advaith Anand, Kilian Lieret, Gage DeZoort, Mia Liu, Javier Duarte, Pan Li, Shih-Chieh Hsu
             </p>
           </div>
         </div>
