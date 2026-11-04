@@ -34,10 +34,10 @@ h2 { font-size: 20px; font-weight: 700; margin: 0 0 10px; padding-bottom: 4px; b
 .contact-button svg { width: 16px; height: 16px; flex: none; }
 
 /* publication rows */
-.research-item { display: flex; gap: 20px; align-items: flex-start; padding: 10px 10px; margin: 0 -10px; border-radius: 6px; }
+.research-item { display: flex; gap: 20px; align-items: center; padding: 10px 10px; margin: 0 -10px; border-radius: 6px; }
 #publications .research-item:nth-of-type(1) { background: var(--hl); }
-.paper-image-container { flex: none; width: 180px; }
-.paper-image-container img { display: block; width: 180px; aspect-ratio: 4 / 3; object-fit: contain; background: #fff; border: 1px solid var(--rule); border-radius: 4px; }
+.paper-image-container { flex: none; width: 160px; }
+.paper-image-container img { display: block; width: 160px; aspect-ratio: 4 / 3; object-fit: contain; padding: 4px; background: #fff; border: 1px solid var(--rule); border-radius: 4px; }
 .paper-details { flex: 1; min-width: 0; font-size: 14.5px; }
 .paper-details p { margin: 0 0 3px; }
 .paper-details p:last-child { margin-bottom: 0; }
@@ -70,6 +70,6 @@ pre code { background: none; padding: 0; }
   .profile-pic { grid-column: 1; grid-row: 1; width: 150px; justify-self: center; margin-bottom: 12px; }
   .right-column { grid-row: 2; }
   .contact-links { grid-row: 3; }
-  .research-item { flex-direction: column; gap: 8px; }
+  .research-item { flex-direction: column; align-items: flex-start; gap: 8px; }
   .paper-image-container, .paper-image-container img { width: 100%; max-width: 360px; }
 }
